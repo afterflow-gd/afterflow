@@ -1190,7 +1190,7 @@ finally {
 
     void setupKeybinds() {
         listenForKeybindSettingPresses(KEYBIND_STAGE, [](Keybind const&, bool isDown, bool isRepeat, double) {
-            if (isDown && !isRepeat && GameManager::get()->m_playLayer) {
+            if (isDown && !isRepeat) {
                 cycleStage(1);
             }
             return true;
@@ -3059,6 +3059,9 @@ finally {
         }
         applyStage();
         say("{} cycle -> {}", stageKey(), stageBanner());
+        if (!gameLayer) {
+            Notification::create(fmt::format("Afterflow: {}", stageText()), NotificationIcon::Info)->show();
+        }
     }
 
     void startCycleWatcher() {
@@ -3075,9 +3078,7 @@ finally {
                     }
                     std::filesystem::remove(triggerPath, errorCode);
                     geode::queueInMainThread([] {
-                        if (GameManager::get()->m_playLayer) {
-                            cycleStage();
-                        }
+                        cycleStage();
                     });
                 }
             }).detach();
@@ -3154,7 +3155,7 @@ $on_mod(Loaded) {
         }
     });
     say("starting mode: {}", stageBanner());
-    say("{} in-level cycles: 2/2 -> 4/4 -> 8/8 -> 16/8 -> 24/12 -> 32/16 -> 40/20 -> off", stageKey());
+    say("{} cycles anywhere: 2/2 -> 4/4 -> 8/8 -> 16/8 -> 24/12 -> 32/16 -> 40/20 -> off", stageKey());
     say("{} toggles the terminal", terminalKey());
     say("host os: {} ({})", hostOSName(), hostOSDescription());
     checkForUpdates(true);

@@ -4,7 +4,7 @@ by prsevend
 
 a predictive input cheat that fixes your early clicks and makes them accurate
 
-built for **geometry dash 2.2** (gd 2.2081 geode 5.11.2 windows). no menus and no in-game overlay: **f6** cycles stages in-level and **f9** toggles a terminal with a live log (kitty on linux/proton or a powershell log viewer on native windows). both keys are geode keybind settings so you can rebind them in mod settings or the keybinds popup
+built for **geometry dash 2.2** (gd 2.2081 geode 5.11.2 windows). no menus and no in-game overlay: **f6** cycles stages anywhere and **f9** toggles a terminal with a live log (kitty on linux/proton or a powershell log viewer on native windows). both keys are geode keybind settings so you can rebind them in mod settings or the keybinds popup
 
 ## what it does
 
@@ -18,13 +18,13 @@ afterflow uses geode keybind settings. open **mod settings → afterflow** (or g
 
 | Setting | Default | Where |
 | ------- | ------- | ----- |
-| Cycle Stage | F6 | in-level |
+| Cycle Stage | F6 | anywhere |
 | Terminal | F9 | everywhere |
 
 the first launch shows a one time note with the current bindings and a shortcut to mod settings. a saved flag records that it was seen so it does not come back
 
 ## stages
-press **f6** (or your bound cycle stage key) in level to cycle. the stage is remembered across sessions. the key also works while the terminal is focused
+press **f6** (or your bound cycle stage key) anywhere to cycle. the stage is remembered across sessions. outside a level a notification shows the selected stage. the key also works while the terminal is focused
 
 | Stage | All modes | Wave |
 | ----- | --------- | ---- |
@@ -62,7 +62,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now afterflow-terminal.service
 ```
 
-the service starts with your user session and reads the running hyprland environment itself, so you do not need to import wayland variables manually. after updating, re-copy the unit and run `systemctl --user daemon-reload` then `systemctl --user restart afterflow-terminal.service`. if f9 still does nothing, check `/dev/shm/afterflow-<user>/watch.log`, `/dev/shm/afterflow-<user>/kitty.log`, and `journalctl --user -u afterflow-terminal.service`
+the service starts with your user session and reads the running compositor environment itself (hyprland, sway, niri, kde, gnome, or x11), so you do not need to import wayland variables manually. after updating, re-copy both the script and the unit, then run `systemctl --user daemon-reload`, `systemctl --user enable afterflow-terminal.service`, and `systemctl --user restart afterflow-terminal.service`. if f9 still does nothing, check `/dev/shm/afterflow-<user>/watch.log`, `/dev/shm/afterflow-<user>/kitty.log`, and `journalctl --user -u afterflow-terminal.service`; `watch.log` records the detected wayland and display values
 
 requires `kitty` on linux/proton. native windows uses powershell and needs no service. on hyprland the service also applies a floating centered window rule and raises the window above the game. on other compositors the log window still opens but placement is left to the window manager
 
@@ -85,7 +85,7 @@ export GEODE_SDK=/path/to/geode-sdk
 geode build
 ```
 
-the packaged mod ends up in `build-win/` when cross compiling from linux (`build/` on windows) and it also gets copied into the game's `geode/mods` folder automatically
+the packaged mod ends up in `build-win/` when cross compiling from linux (`build/` on windows and macos) and it also gets copied into the game's `geode/mods` folder automatically
 
 ## installation
 
