@@ -6,7 +6,6 @@
 #include <Geode/loader/SettingV3.hpp>
 #include <Geode/utils/Keyboard.hpp>
 #include <Geode/ui/GeodeUI.hpp>
-#include <Geode/ui/Notification.hpp>
 #include <Geode/ui/Popup.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/EffectGameObject.hpp>
@@ -1417,8 +1416,8 @@ finally {
                 return;
             }
             log::warn("terminal process exited: {}", errorLine);
-            geode::queueInMainThread([] {
-                Notification::create("Afterflow terminal failed to open", NotificationIcon::Error)->show();
+            geode::queueInMainThread([errorLine] {
+                say("terminal failed to open: {}", errorLine);
             });
         }).detach();
     }
@@ -1681,7 +1680,7 @@ finally {
         }
 
         if (!launchWindowsTerminal() && !launchWindowsTerminalWithWScript()) {
-            Notification::create("Afterflow terminal failed to open", NotificationIcon::Error)->show();
+            say("terminal failed to open");
         }
 #else
         log::warn("terminal is not available on this platform");
@@ -3059,9 +3058,6 @@ finally {
         }
         applyStage();
         say("{} cycle -> {}", stageKey(), stageBanner());
-        if (!gameLayer) {
-            Notification::create(fmt::format("Afterflow: {}", stageText()), NotificationIcon::Info)->show();
-        }
     }
 
     void startCycleWatcher() {

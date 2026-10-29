@@ -24,7 +24,7 @@ afterflow uses geode keybind settings. open **mod settings → afterflow** (or g
 the first launch shows a one time note with the current bindings and a shortcut to mod settings. a saved flag records that it was seen so it does not come back
 
 ## stages
-press **f6** (or your bound cycle stage key) anywhere to cycle. the stage is remembered across sessions. outside a level a notification shows the selected stage. the key also works while the terminal is focused
+press **f6** (or your bound cycle stage key) anywhere to cycle. the stage is remembered across sessions. outside a level the selected stage is written to the terminal log. the key also works while the terminal is focused
 
 | Stage | All modes | Wave |
 | ----- | --------- | ---- |

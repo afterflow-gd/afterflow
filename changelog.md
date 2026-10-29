@@ -1,3 +1,7 @@
+# v2.1.5
+
+- stage cycle feedback and terminal errors now go to the terminal log only. afterflow no longer shows geode notifications; open the windows powershell terminal or kitty terminal to see the selected stage.
+
 # v2.1.4
 
 - f6 now cycles stages outside a level too. a notification shows the selected stage while in a menu or editor.
