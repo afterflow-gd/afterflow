@@ -1,0 +1,30 @@
+name: Build Android
+
+on:
+  push:
+    branches: [android-port]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [Android64, Android32]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: geode-sdk/build-geode-mod@main
+        id: build
+        with:
+          sdk: given
+          target: ${{ matrix.target }}
+          combine: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: afterflow-${{ matrix.target }}
+          path: ${{ steps.build.outputs.build-output }}

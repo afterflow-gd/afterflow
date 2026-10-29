@@ -14,6 +14,7 @@
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/HardStreak.hpp>
 #include <Geode/modify/LevelEditorLayer.hpp>
+#include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 #include <Geode/modify/RingObject.hpp>
@@ -1138,6 +1139,10 @@ finally {
     }
 
     bool showKeybindIntro() {
+#ifdef GEODE_IS_ANDROID
+        // no physical keyboard on phones: the pause-menu buttons are the controls
+        return false;
+#endif
         if (Mod::get()->getSavedValue<bool>(KEYBIND_INTRO_DONE, false)) {
             return false;
         }
@@ -1786,6 +1791,182 @@ finally {
         return fmt::format("stage {}: {} ticks all | {} ticks wave ({:g}f all | {:g}f wave @ 60fps)",
             state.stageIndex + 1, state.ticksAllModes, state.ticksWaveMode, state.ticksAllModes / 4.f, state.ticksWaveMode / 4.f);
     }
+
+#ifdef GEODE_IS_ANDROID
+    class AfterflowOverlay : public CCLayer {
+    protected:
+        CCLayerColor* m_dim = nullptr;
+        CCScale9Sprite* m_panel = nullptr;
+        CCLabelBMFont* m_stageLabel = nullptr;
+        ButtonSprite* m_powerSprite = nullptr;
+        CCMenuItemSpriteExtra* m_fab = nullptr;
+        bool m_open = false;
+        std::chrono::steady_clock::time_point m_openedAt{};
+
+        void refresh() {
+            if (!m_stageLabel) {
+                return;
+            }
+            if (state.isEnabled) {
+                m_stageLabel->setString(fmt::format("stage {} - {}t all / {}t wave", state.stageIndex + 1, state.ticksAllModes, state.ticksWaveMode).c_str());
+            }
+            else {
+                m_stageLabel->setString("stage off - raw input");
+            }
+            if (m_powerSprite) {
+                m_powerSprite->setString(state.isEnabled ? "on" : "off");
+            }
+        }
+
+        void setOpen(bool open) {
+            m_open = open;
+            m_openedAt = std::chrono::steady_clock::now();
+            if (m_dim) {
+                m_dim->setVisible(open);
+            }
+            refresh();
+            log::info("[afterflow] menu {}", open ? "open" : "closed");
+        }
+
+    public:
+        static AfterflowOverlay* create() {
+            auto* overlay = new AfterflowOverlay();
+            if (overlay && overlay->init()) {
+                overlay->autorelease();
+                return overlay;
+            }
+            CC_SAFE_DELETE(overlay);
+            return nullptr;
+        }
+
+        bool init() override {
+            if (!CCLayer::init()) {
+                return false;
+            }
+            this->setID("afterflow-overlay"_spr);
+
+            auto winSize = CCDirector::get()->getWinSize();
+            log::info("[afterflow] overlay init winSize {}x{}", winSize.width, winSize.height);
+
+            m_dim = CCLayerColor::create({ 0, 0, 0, 110 }, winSize.width, winSize.height);
+            m_dim->setVisible(false);
+            m_dim->setID("afterflow-dim"_spr);
+            this->addChild(m_dim, 1);
+
+            m_panel = CCScale9Sprite::create("GJ_square01.png");
+            m_panel->setContentSize({ 280.f, 150.f });
+            m_panel->setPosition({ winSize.width / 2.f, winSize.height / 2.f });
+            m_panel->setID("afterflow-panel"_spr);
+            m_dim->addChild(m_panel, 2);
+
+            auto title = CCLabelBMFont::create("AFTERFLOW", "goldFont.fnt");
+            title->setScale(0.75f);
+            title->setPosition({ 140.f, 124.f });
+            m_panel->addChild(title);
+
+            m_stageLabel = CCLabelBMFont::create("", "bigFont.fnt");
+            m_stageLabel->setScale(0.4f);
+            m_stageLabel->setPosition({ 140.f, 96.f });
+            m_panel->addChild(m_stageLabel);
+
+            auto menu = CCMenu::create();
+            menu->setPosition({ 0.f, 0.f });
+            m_panel->addChild(menu);
+
+            auto prevButton = CCMenuItemSpriteExtra::create(
+                ButtonSprite::create("<", "goldFont.fnt", "GJ_button_04.png", .75f),
+                this,
+                menu_selector(AfterflowOverlay::onPrev)
+            );
+            prevButton->setPosition({ 45.f, 45.f });
+            menu->addChild(prevButton);
+
+            auto powerButton = CCMenuItemSpriteExtra::create(
+                ButtonSprite::create("on", "goldFont.fnt", "GJ_button_01.png", .85f),
+                this,
+                menu_selector(AfterflowOverlay::onPower)
+            );
+            powerButton->setPosition({ 140.f, 45.f });
+            menu->addChild(powerButton);
+            m_powerSprite = typeinfo_cast<ButtonSprite*>(powerButton->getNormalImage());
+
+            auto nextButton = CCMenuItemSpriteExtra::create(
+                ButtonSprite::create(">", "goldFont.fnt", "GJ_button_04.png", .75f),
+                this,
+                menu_selector(AfterflowOverlay::onNext)
+            );
+            nextButton->setPosition({ 235.f, 45.f });
+            menu->addChild(nextButton);
+
+            auto closeButton = CCMenuItemSpriteExtra::create(
+                ButtonSprite::create("x", "goldFont.fnt", "GJ_button_06.png", .55f),
+                this,
+                menu_selector(AfterflowOverlay::onClose)
+            );
+            closeButton->setPosition({ 252.f, 124.f });
+            menu->addChild(closeButton);
+
+            auto fabMenu = CCMenu::create();
+            fabMenu->setPosition({ 0.f, 0.f });
+            this->addChild(fabMenu, 3);
+
+            m_fab = CCMenuItemSpriteExtra::create(
+                ButtonSprite::create("A", "goldFont.fnt", "GJ_button_01.png", .9f),
+                this,
+                menu_selector(AfterflowOverlay::onFab)
+            );
+            m_fab->setPosition({ winSize.width - 34.f, 34.f });
+            m_fab->setID("afterflow-fab"_spr);
+            fabMenu->addChild(m_fab);
+
+            this->setTouchEnabled(true);
+            refresh();
+            log::info("[afterflow] overlay ready: fab at {}x{}", winSize.width - 34.f, 34.f);
+            return true;
+        }
+
+        void onFab(CCObject*) {
+            setOpen(!m_open);
+            Notification::create(fmt::format("afterflow menu {}", m_open ? "on" : "off"), NotificationIcon::Info, 0.8f)->show();
+        }
+
+        void onClose(CCObject*) {
+            setOpen(false);
+        }
+
+        void onPrev(CCObject*) {
+            cycleStage(-1);
+            refresh();
+        }
+
+        void onNext(CCObject*) {
+            cycleStage(1);
+            refresh();
+        }
+
+        void onPower(CCObject*) {
+            state.stageIndex = state.isEnabled ? (STAGE_TABLE_SIZE - 1) : 0;
+            Mod::get()->setSavedValue("stage", state.stageIndex);
+            resetPending();
+            applyStage();
+            refresh();
+            Notification::create(stageText(), NotificationIcon::Info, 1.2f)->show();
+        }
+
+        bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
+            if (!m_open || !m_panel) {
+                return false;
+            }
+            auto point = touch->getLocation();
+            log::info("[afterflow] touch at {:.0f},{:.0f} (menu open)", point.x, point.y);
+            return true;
+        }
+
+        void registerWithTouchDispatcher() override {
+            CCTouchDispatcher::get()->addTargetedDelegate(this, -500, false);
+        }
+    };
+#endif
 
     void dropGhosts() {
         for (auto** ghostSlot : { &state.ghostPlayer1, &state.ghostPlayer2 }) {
@@ -3207,6 +3388,17 @@ class $modify(BufPlayLayer, PlayLayer) {
         state.wasAutoReleased = false;
         forgetPress();
         resetPending();
+#ifdef GEODE_IS_ANDROID
+        if (!this->getChildByID("afterflow-overlay"_spr)) {
+            if (auto* overlay = AfterflowOverlay::create()) {
+                this->addChild(overlay, 1000);
+                log::info("[afterflow] overlay attached to PlayLayer");
+            }
+            else {
+                log::warn("[afterflow] overlay creation failed");
+            }
+        }
+#endif
         return true;
     }
 
@@ -3269,6 +3461,46 @@ class $modify(BufMenuLayer, MenuLayer) {
         ));
         return true;
     }
+};
+
+class $modify(BufPauseLayer, PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+#ifdef GEODE_IS_ANDROID
+        auto menu = CCMenu::create();
+        menu->setPosition({ 0.f, 0.f });
+        menu->setID("afterflow-mobile-menu"_spr);
+
+        auto stageButton = CCMenuItemSpriteExtra::create(
+            ButtonSprite::create("stage", "goldFont.fnt", "GJ_button_05.png", .7f),
+            this,
+            menu_selector(BufPauseLayer::onCycleStage)
+        );
+        stageButton->setPosition({ 40.f, 40.f });
+        menu->addChild(stageButton);
+
+        auto infoButton = CCMenuItemSpriteExtra::create(
+            ButtonSprite::create("info", "goldFont.fnt", "GJ_button_05.png", .7f),
+            this,
+            menu_selector(BufPauseLayer::onShowStage)
+        );
+        infoButton->setPosition({ 40.f, 95.f });
+        menu->addChild(infoButton);
+
+        this->addChild(menu, 100);
+#endif
+    }
+
+#ifdef GEODE_IS_ANDROID
+    void onCycleStage(CCObject*) {
+        cycleStage(1);
+        Notification::create(stageText(), NotificationIcon::Info, 1.5f)->show();
+    }
+
+    void onShowStage(CCObject*) {
+        Notification::create(stageText(), NotificationIcon::Info, 2.f)->show();
+    }
+#endif
 };
 
 class $modify(BufEditorLayer, LevelEditorLayer) {
@@ -3624,6 +3856,11 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
     }
 
     void handleButton(bool isDown, int buttonId, bool isFirstPlayer) {
+        static int debugCounter = 0;
+        if (debugCounter < 40) {
+            ++debugCounter;
+            log::info("[afterflow] handleButton down={} id={} p1={} enabled={} stage={}", isDown, buttonId, isFirstPlayer, state.isEnabled, state.stageIndex);
+        }
         if (!state.isSimulating && buttonId == 1 && !state.isInjecting) {
             auto* player1 = this->m_player1;
             recordRealInput(isDown, player1);

@@ -2,11 +2,12 @@
     "geode": "5.11.2",
     "gd": {
         "win": "2.2081",
-        "mac": "2.2081"
+        "mac": "2.2081",
+        "android": "2.2081"
     },
     "id": "afterflow.prsevend",
     "name": "Afterflow",
-    "version": "v2.1.3",
+    "version": "v2.1.8",
     "developer": "prsevend",
     "description": "a predictive input cheat that fixes your early clicks and makes them accurate.",
     "tags": [
