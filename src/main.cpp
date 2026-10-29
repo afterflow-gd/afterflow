@@ -595,13 +595,15 @@ chmod 700 "$RUNDIR" 2>/dev/null || true
 LOG="$RUNDIR/terminal.log"
 CLOSE="$RUNDIR/close"
 PIDFILE="$RUNDIR/kitty.pid"
+CYCLE="$RUNDIR/cycle-stage"
+CYCLE_HELPER="$RUNDIR/cycle-helper.sh"
+KITTY_CONF="$RUNDIR/kitty.conf"
 CLASS="afterflow"
 
 if [ "${1:-}" = "--inside" ]; then
     clear
     rm -f "$CLOSE"
     printf '\n\033[1;38;5;141mAfterflow\033[0m  predictive input buffer\n\n'
-    CYCLE="$RUNDIR/cycle-stage"
     stty -echo -icanon min 1 time 0 2>/dev/null || true
     tail -n 12 -F "$LOG" &
     TAIL_PID=$!
@@ -623,10 +625,10 @@ if [ "${1:-}" = "--inside" ]; then
         fi
         if [ "$ch" = $'\e' ]; then
             seq="$ch"
-            while IFS= read -rsn1 -t 0.05 c; do
+            while IFS= read -rsn1 -t 0.15 c; do
                 seq+="$c"
                 case "$seq" in
-                    $'\e[17~'|$'\e[17;'*'~'|$'\e[17;'*'u')
+                    $'\e[17~'|$'\e[17u'|$'\e[17;'*'~'|$'\e[17;'*'u')
                         printf 'cycle\n' > "$CYCLE"
                         break
                         ;;
@@ -641,6 +643,15 @@ if [ "${1:-}" = "--inside" ]; then
 fi
 
 cd "$HOME" 2>/dev/null || cd /tmp
+
+printf '#!/bin/sh\nprintf "cycle\\n" > "%s"\n' "$CYCLE" > "$CYCLE_HELPER" 2>/dev/null || true
+chmod 700 "$CYCLE_HELPER" 2>/dev/null || true
+: > "$KITTY_CONF" 2>/dev/null || true
+KITTY_USER_CONF="${KITTY_CONFIG_DIRECTORY:-$HOME/.config/kitty}/kitty.conf"
+if [ -f "$KITTY_USER_CONF" ]; then
+    printf 'include %s\n' "$KITTY_USER_CONF" >> "$KITTY_CONF" 2>/dev/null || true
+fi
+printf 'map f6 launch --type=background /bin/sh %s\n' "$CYCLE_HELPER" >> "$KITTY_CONF" 2>/dev/null || true
 
 raise_window() {
     command -v hyprctl >/dev/null 2>&1 || return 0
@@ -704,7 +715,7 @@ if [ -z "$KITTY" ]; then
     echo "kitty not found on path" >"$RUNDIR/kitty.log"
     exit 1
 fi
-nohup "$KITTY" --title "Afterflow" --class "$CLASS" --instance-group afterflow \
+nohup "$KITTY" --config "$KITTY_CONF" --title "Afterflow" --class "$CLASS" --instance-group afterflow \
     -o confirm_os_window_close=0 -o close_on_child_death=yes \
     -o initial_window_width=100c -o initial_window_height=30c -o remember_window_size=no \
     /bin/bash "$0" --inside >"$RUNDIR/kitty.log" 2>&1 &
@@ -772,7 +783,7 @@ while true; do
         while IFS= read -rsn1 -t 1 c; do
             seq+="$c"
             case "$seq" in
-                $'\e[17~'|$'\e[17;'*'~'|$'\e[17;'*'u')
+                $'\e[17~'|$'\e[17u'|$'\e[17;'*'~'|$'\e[17;'*'u')
                     printf 'cycle\n' > "$CYCLE"
                     break
                     ;;
@@ -816,6 +827,13 @@ $trigger = Join-Path $PSScriptRoot 'afterflow-cycle-stage'
 $pidFile = Join-Path $PSScriptRoot 'afterflow-terminal.pid'
 $closeFile = Join-Path $PSScriptRoot 'afterflow-terminal.close'
 $errorFile = Join-Path $PSScriptRoot 'afterflow-terminal.error'
+$script:lastCycleAt = [DateTime]::MinValue
+$script:closing = $false
+$script:triggerPaths = @($trigger)
+if ($env:TEMP) {
+    $script:triggerPaths += (Join-Path $env:TEMP 'afterflow-cycle-stage')
+}
+$script:triggerPaths = @($script:triggerPaths | Select-Object -Unique)
 
 Remove-Item -LiteralPath $closeFile -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
@@ -852,6 +870,7 @@ try {
     $text.WordWrap = $false
     $text.DetectUrls = $false
     $text.ScrollBars = [System.Windows.Forms.RichTextBoxScrollBars]::Vertical
+    $text.TabStop = $true
     $form.Controls.Add($text)
 
     $text.Text = "Afterflow  predictive input buffer`r`n`r`n"
@@ -859,19 +878,44 @@ try {
     $script:lastLength = 0
     $script:share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
 
-    $form.Add_KeyDown({
+    $keyHandler = {
         param($sender, $eventArgs)
         if ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::F6) {
-            Set-Content -LiteralPath $trigger -Value 'cycle' -NoNewline -Encoding ASCII
             $eventArgs.SuppressKeyPress = $true
             $eventArgs.Handled = $true
+            $now = [DateTime]::UtcNow
+            if (($now - $script:lastCycleAt).TotalMilliseconds -ge 120) {
+                $script:lastCycleAt = $now
+                foreach ($path in $script:triggerPaths) {
+                    try {
+                        [System.IO.File]::WriteAllText($path, 'cycle', [System.Text.Encoding]::ASCII)
+                    }
+                    catch {
+                    }
+                }
+            }
         }
         elseif ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::F9) {
             $eventArgs.SuppressKeyPress = $true
             $eventArgs.Handled = $true
-            $form.Close()
+            if (-not $script:closing) {
+                $script:closing = $true
+                $form.Close()
+            }
         }
-    })
+    }
+
+    $previewKeyHandler = {
+        param($sender, $eventArgs)
+        if ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::F6 -or $eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::F9) {
+            $eventArgs.IsInputKey = $true
+        }
+    }
+
+    $form.Add_KeyDown($keyHandler)
+    $form.Add_PreviewKeyDown($previewKeyHandler)
+    $text.Add_KeyDown($keyHandler)
+    $text.Add_PreviewKeyDown($previewKeyHandler)
 
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 100
@@ -932,8 +976,9 @@ try {
     $timer.Start()
 
     $form.Add_Shown({
-        $form.Activate()
+        [void]$form.Activate()
         $form.BringToFront()
+        [void]$text.Focus()
     })
 
     [System.Windows.Forms.Application]::Run($form)

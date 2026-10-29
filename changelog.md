@@ -1,3 +1,7 @@
+# v2.1.6
+
+- f6 now cycles stages from the windows powershell terminal and the linux kitty terminal. windows handles f6 directly in the log viewer; kitty maps f6 to a cycle helper and keeps the raw-key fallback.
+
 # v2.1.5
 
 - stage cycle feedback and terminal errors now go to the terminal log only. afterflow no longer shows geode notifications; open the windows powershell terminal or kitty terminal to see the selected stage.

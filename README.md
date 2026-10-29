@@ -44,13 +44,13 @@ the game runs as a windows process under proton so it cannot start a linux progr
 
 afterflow detects whether it is running under proton, native windows, or native macos and picks the matching terminal. on native windows the terminal key launches **powershell** directly with a small winforms log viewer (title `Afterflow`). the log is a transient `%TEMP%\afterflow-terminal-<pid>.log` opened with delete-on-close, so windows removes it when the game exits. the viewer stays on top and tails the log. the systemd/kitty path is only used under proton
 
-if the viewer does not appear, afterflow shows a notification and writes the powershell error to the geode console. if the game is in exclusive fullscreen, switch to borderless or windowed so the viewer can be raised above it.
+if the viewer does not appear, afterflow writes the powershell error to the terminal log and the geode console. if the game is in exclusive fullscreen, switch to borderless or windowed so the viewer can be raised above it.
 
 on native macos the terminal key opens **terminal.app** with a bash log viewer (title `Afterflow`) that tails `$TMPDIR/afterflow-<user>/terminal.log`. the runtime directory is per-user and temporary, and no service or extra dependency is needed
 
 one setting controls the terminal: **enable terminal** turns the terminal key on or off and defaults to on
 
-the terminal captures **f6** and **f9** to match the default bindings so key escape sequences are not echoed. f6 forwards a stage cycle request to the game and f9 closes the window. if you rebind the settings the in game keys change but the terminal's capture keys stay f6/f9. the same capture works in the native windows and macos terminals
+the terminal captures **f6** and **f9** to match the default bindings so key escape sequences are not echoed. f6 forwards a stage cycle request to the game and f9 closes the window. on linux the kitty window maps f6 directly to a cycle helper, and on windows the log viewer handles f6 itself. if you rebind the settings the in game keys change but the terminal's capture keys stay f6/f9. the same capture works in the native windows and macos terminals
 
 the service is included as `afterflow-terminal-watch.sh` + `afterflow-terminal.service`:
 
