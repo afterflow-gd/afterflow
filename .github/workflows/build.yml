@@ -33,7 +33,6 @@ jobs:
 
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
-    continue-on-error: ${{ matrix.config.name == 'iOS' || matrix.config.name == 'Android32' || matrix.config.name == 'Android64' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +40,8 @@ jobs:
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
+          sdk: given
+          cli: latest
           combine: true
           target: ${{ matrix.config.target }}
           bindings-ref: ${{ matrix.config.bindings-ref }}
