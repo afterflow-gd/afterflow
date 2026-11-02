@@ -128,6 +128,7 @@ copy the resulting .geode file into geometry dash's geode/mods folder and restar
 
 ## credits
 
+sevend (@pr7d)
 dynamic mod
 whitechocolate
 click before frames

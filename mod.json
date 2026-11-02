@@ -8,7 +8,7 @@
   },
   "id": "afterflow.prsevend",
   "name": "Afterflow",
-  "version": "2.4.0",
+  "version": "2.2.0",
   "developer": "prsevend",
   "description": "a predictive input cheat that fixes your early clicks and makes them accurate, with customizable UI colors and a polished control panel.",
   "tags": [
@@ -30,18 +30,30 @@
     "terminal-title": {
       "type": "title",
       "name": "terminal",
-      "description": "terminal window options"
+      "description": "terminal window options",
+      "platforms": [
+        "win",
+        "mac"
+      ]
     },
     "terminal-enabled": {
       "type": "bool",
       "name": "enable terminal",
       "description": "show the terminal button in the afterflow control panel",
-      "default": true
+      "default": true,
+      "platforms": [
+        "win",
+        "mac"
+      ]
     },
     "keybinds-title": {
       "type": "title",
       "name": "keybinds",
-      "description": "change geodes keybinding anytime for afterflow"
+      "description": "change geodes keybinding anytime for afterflow",
+      "platforms": [
+        "win",
+        "mac"
+      ]
     },
     "keybind-stage": {
       "type": "keybind",
@@ -50,6 +62,10 @@
       "category": "gameplay",
       "default": [
         "F6"
+      ],
+      "platforms": [
+        "win",
+        "mac"
       ]
     },
     "keybind-terminal": {
@@ -59,6 +75,10 @@
       "category": "universal",
       "default": [
         "F9"
+      ],
+      "platforms": [
+        "win",
+        "mac"
       ]
     },
     "ui-title": {
@@ -113,6 +133,25 @@
       "min": 0.8,
       "max": 1.5,
       "step": 0.05
+    },
+    "mobile-title": {
+      "type": "title",
+      "name": "mobile",
+      "description": "android and ios options",
+      "platforms": [
+        "android",
+        "ios"
+      ]
+    },
+    "mobile-floating-button": {
+      "type": "bool",
+      "name": "floating af button",
+      "description": "also show the draggable af button on screen. the pause menu button is always there",
+      "default": false,
+      "platforms": [
+        "android",
+        "ios"
+      ]
     }
   }
 }

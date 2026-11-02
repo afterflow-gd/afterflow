@@ -1,3 +1,10 @@
+# v2.4.1
+
+- **mobile pause menu button**: android and ios now get an AF button in the pause menu, directly under the settings button and the same size as it. tap it to open the control panel.
+- the floating draggable af button is now off by default on mobile; turn it back on with the new "floating af button" setting.
+- keybind and terminal settings are now windows/mac only.
+- [build] workflow now builds android32, android64 and ios, and still packages one combined `.geode` if ios fails.
+
 # v2.4.0
 
 - **auto-update in game**: the out-of-date popup now downloads, verifies and installs the new `.geode` itself, then restarts the game. no more browser round-trip.

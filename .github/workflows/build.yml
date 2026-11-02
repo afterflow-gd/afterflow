@@ -19,9 +19,16 @@ jobs:
             os: windows-latest
           - name: macOS
             os: macos-latest
+          - name: Android32
+            os: ubuntu-latest
+            target: Android32
+          - name: Android64
+            os: ubuntu-latest
+            target: Android64
 
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
+    continue-on-error: ${{ matrix.config.name == 'iOS' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -29,13 +36,14 @@ jobs:
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: given
           combine: true
+          target: ${{ matrix.config.target }}
 
   package:
     name: Package builds
     runs-on: ubuntu-latest
     needs: ['build']
+    if: ${{ !cancelled() }}
 
     steps:
       - uses: geode-sdk/build-geode-mod/combine@main

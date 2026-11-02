@@ -8,6 +8,7 @@
 #include <Geode/utils/Keyboard.hpp>
 #include <Geode/ui/GeodeUI.hpp>
 #include <Geode/ui/Popup.hpp>
+#include <Geode/ui/TextInput.hpp>
 #include <Geode/ui/SceneEvent.hpp>
 #include <Geode/cocos/touch_dispatcher/CCTouchDispatcher.h>
 #include <Geode/modify/MenuLayer.hpp>
@@ -24,6 +25,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <cwctype>
@@ -143,9 +145,33 @@ namespace {
     constexpr int STAGE_TABLE_SIZE = sizeof(STAGE_TABLE) / sizeof(STAGE_TABLE[0]);
 
     constexpr int STAGE_MAX_STAGES = 24;
+    constexpr int CUSTOM_STAGE_LIMIT = 4;
+    constexpr int CUSTOM_TICKS_MIN = 1;
+    constexpr int CUSTOM_TICKS_MAX = 240;
+    constexpr int CUSTOM_TICKS_SAFE = 120;
 
-    std::vector<std::string> g_customStages;
+    struct CustomStage {
+        int ticksAll;
+        int ticksWave;
+    };
+
+    std::vector<CustomStage> g_customStages;
     bool g_customStagesLoaded = false;
+
+    int clampCustomTicks(int value) {
+        return std::clamp(value, CUSTOM_TICKS_MIN, CUSTOM_TICKS_MAX);
+    }
+
+    // real popup shown when a custom delay crosses over the safe limit.
+    // the player has to press the button to dismiss it
+    void showHighTicksPopup() {
+        std::string message = fmt::format(
+            "delays over {0} ticks may lag or work worse than {0}.\n"
+            "your game might stutter or the stage might act weird.",
+            CUSTOM_TICKS_SAFE
+        );
+        FLAlertLayer::create("warning", message.c_str(), "ok i understand")->show();
+    }
 
     void loadCustomStages() {
         if (g_customStagesLoaded) {
@@ -154,16 +180,25 @@ namespace {
         g_customStagesLoaded = true;
         g_customStages.clear();
         std::string raw = Mod::get()->getSavedValue<std::string>("custom-stages", "");
-        std::string piece;
-        for (size_t index = 0; index <= raw.size(); ++index) {
-            if (index == raw.size() || raw[index] == ';') {
-                if (!piece.empty()) {
-                    g_customStages.push_back(piece);
-                }
-                piece.clear();
-            } else {
-                piece += raw[index];
+        size_t start = 0;
+        while (start <= raw.size()) {
+            size_t end = raw.find(';', start);
+            if (end == std::string::npos) {
+                end = raw.size();
             }
+            std::string piece = raw.substr(start, end - start);
+            if (!piece.empty() && static_cast<int>(g_customStages.size()) < CUSTOM_STAGE_LIMIT) {
+                int ticksAll = 0;
+                int ticksWave = 0;
+                if (std::sscanf(piece.c_str(), "%d:%d", &ticksAll, &ticksWave) == 2) {
+                    g_customStages.push_back({ clampCustomTicks(ticksAll), clampCustomTicks(ticksWave) });
+                }
+                else {
+                    // old name-only placeholder from v2.4.0/2.4.1
+                    g_customStages.push_back({ 8, 8 });
+                }
+            }
+            start = end + 1;
         }
     }
 
@@ -171,10 +206,19 @@ namespace {
         std::string raw;
         for (size_t index = 0; index < g_customStages.size(); ++index) {
             if (index > 0) { raw += ';'; }
-            raw += g_customStages[index];
+            raw += fmt::format("{}:{}", g_customStages[index].ticksAll, g_customStages[index].ticksWave);
         }
         Mod::get()->setSavedValue<std::string>("custom-stages", raw);
         (void)Mod::get()->saveData();
+    }
+
+    CustomStage* customStageFor(int stageIndex) {
+        loadCustomStages();
+        int custom = stageIndex - STAGE_TABLE_SIZE;
+        if (custom >= 0 && custom < static_cast<int>(g_customStages.size())) {
+            return &g_customStages[custom];
+        }
+        return nullptr;
     }
 
     int stageTotalCount() {
@@ -457,6 +501,13 @@ namespace {
 #else
         return false;
 #endif
+    }
+
+    bool showFloatingLauncher() {
+        if (!isMobileHost()) {
+            return false;
+        }
+        return Mod::get()->getSettingValue<bool>("mobile-floating-button");
     }
 
     HostOS hostOS() {
@@ -2218,13 +2269,18 @@ finally {
     }
 
     void clickBudget() {
-        double budgetMilliseconds = state.userBudgetMilliseconds;
+        // above 240 steps per second every stage is simulated with st() times
+        // more (and shorter) ticks, so the same search costs roughly that much
+        // more cpu time. scale the time limit with it, otherwise the search runs
+        // out of budget and gives up. at 240 steps/s or below this is exactly 1.
+        double budgetScale = std::clamp(static_cast<double>(stepScale()), 1.0, 3.0);
+        double budgetMilliseconds = state.userBudgetMilliseconds * budgetScale;
         if (state.automaticBudget) {
             auto* cocosDirector = CCDirector::get();
             double frameInterval = cocosDirector->getAnimationInterval() * 1000.0;
             double frameDuration = cocosDirector->getDeltaTime() * 1000.0;
             if (frameInterval > 0.0 && frameDuration > std::max(frameInterval * 2.0, 20.0)) {
-                budgetMilliseconds = std::min(budgetMilliseconds, 4.0);
+                budgetMilliseconds = std::min(budgetMilliseconds, 4.0 * budgetScale);
             }
         }
         state.budgetMilliseconds = budgetMilliseconds;
@@ -2236,6 +2292,10 @@ finally {
             state.isEnabled = stageDefinition.isEnabled;
             state.ticksAllModes = stageDefinition.ticksAllModes;
             state.ticksWaveMode = stageDefinition.ticksWaveMode;
+        } else if (auto* custom = customStageFor(state.stageIndex)) {
+            state.isEnabled = true;
+            state.ticksAllModes = custom->ticksAll;
+            state.ticksWaveMode = custom->ticksWave;
         } else {
             state.isEnabled = true;
             state.ticksAllModes = 2;
@@ -2260,7 +2320,7 @@ finally {
 
     constexpr float DECK_WIDTH = 700.f;
     constexpr float DECK_HEIGHT = 460.f;
-    constexpr float DECK_RADIUS = 22.f;
+    constexpr float DECK_RADIUS = 10.f;
     constexpr float MARGIN = 24.f;
     constexpr float CONTENT_X = MARGIN;
     constexpr float CONTENT_WIDTH = DECK_WIDTH - MARGIN * 2.f;
@@ -2278,7 +2338,7 @@ finally {
     constexpr float CARD_TOP = 350.f;
     constexpr float CARD_BOTTOM = 76.f;
     constexpr float CARD_HEIGHT = CARD_TOP - CARD_BOTTOM;
-    constexpr float CARD_RADIUS = 16.f;
+    constexpr float CARD_RADIUS = 8.f;
 
     constexpr float LOG_X = CONTENT_X;
     constexpr float LOG_Y = CARD_BOTTOM;
@@ -2308,11 +2368,18 @@ finally {
     constexpr float STAGE_CELL_HEIGHT = 28.f;
     constexpr float STAGE_LABEL_Y = STAGE_TRACK_Y + STAGE_TRACK_HEIGHT * 0.5f;
 
-    constexpr float STAGE_TIMING_ALL_Y = 162.f;
-    constexpr float STAGE_TIMING_WAVE_Y = 118.f;
-    constexpr float STAGE_HINT_Y = 92.f;
-    constexpr float STAGE_BAR_X = CONTENT_X + 150.f;
-    constexpr float STAGE_BAR_WIDTH = CONTENT_RIGHT - 20.f - STAGE_BAR_X;
+    constexpr float STAGE_TIMING_ALL_Y = 168.f;
+    constexpr float STAGE_TIMING_WAVE_Y = 122.f;
+    constexpr float STAGE_HINT_Y = 94.f;
+    constexpr float STAGE_BAR_X = 430.f;
+    constexpr float STAGE_BAR_WIDTH = CONTENT_RIGHT - 22.f - STAGE_BAR_X;
+
+    constexpr float TICK_BTN_W = 42.f;
+    constexpr float TICK_BTN_H = 30.f;
+    constexpr float TICK_BTN_X[4] = { 146.f, 192.f, 324.f, 370.f };
+    constexpr float TICK_VALUE_X = 238.f;
+    constexpr float TICK_VALUE_W = 80.f;
+    constexpr float TICK_LABEL_MAX_WIDTH = 92.f;
 
     constexpr float COPY_X = CONTENT_RIGHT - 20.f - 74.f;
     constexpr float COPY_Y = LOG_HEADER_Y - 16.f;
@@ -2470,6 +2537,10 @@ finally {
         }
         label->setScale(scale * getUIFontScale());
         label->setColor(color);
+        // smooth the bitmap font atlas so scaled text is not pixelated
+        if (auto* texture = label->getTexture()) {
+            texture->setAntiAliasTexParameters();
+        }
         return label;
     }
 
@@ -2517,7 +2588,7 @@ finally {
             return;
         }
 
-        constexpr int SEGMENTS = 24;
+        constexpr int SEGMENTS = 12;
         constexpr float PI = 3.14159265358979323846f;
         CCPoint points[4 * (SEGMENTS + 1)];
         int count = 0;
@@ -2531,7 +2602,51 @@ finally {
         addArc(right - radius, top - radius, 0.f, PI * 0.5f);
         addArc(left + radius, top - radius, PI * 0.5f, PI);
         addArc(left + radius, bottom + radius, PI, PI * 1.5f);
-        node->drawPolygon(points, static_cast<unsigned int>(count), fill, borderWidth, border);
+        // consecutive arcs share a point whenever the straight edge between them
+        // has zero length (pill shapes). cocos2d turns those duplicate points
+        // into spikes when it builds the border, so drop them first
+        CCPoint filtered[4 * (SEGMENTS + 1)];
+        int filteredCount = 0;
+        auto isNear = [](CCPoint const& first, CCPoint const& second) {
+            return std::abs(first.x - second.x) < 0.05f && std::abs(first.y - second.y) < 0.05f;
+        };
+        for (int index = 0; index < count; ++index) {
+            if (filteredCount == 0 || !isNear(points[index], filtered[filteredCount - 1])) {
+                filtered[filteredCount++] = points[index];
+            }
+        }
+        if (filteredCount > 1 && isNear(filtered[0], filtered[filteredCount - 1])) {
+            --filteredCount;
+        }
+        if (filteredCount < 3) {
+            return;
+        }
+        node->drawPolygon(filtered, static_cast<unsigned int>(filteredCount), fill, borderWidth, border);
+    }
+
+    CCRect customAddRect() {
+        return CCRect(CONTENT_RIGHT - 22.f - 104.f, STAGE_META_Y - 15.f, 104.f, 30.f);
+    }
+
+    CCRect customRemoveRect() {
+        return CCRect(CONTENT_RIGHT - 22.f - 104.f - 8.f - 88.f, STAGE_META_Y - 15.f, 88.f, 30.f);
+    }
+
+    float tickRowY(int row) {
+        return row == 0 ? STAGE_TIMING_ALL_Y : STAGE_TIMING_WAVE_Y;
+    }
+
+    CCRect tickButtonRect(int row, int which) {
+        return CCRect(TICK_BTN_X[which], tickRowY(row) - TICK_BTN_H * 0.5f, TICK_BTN_W, TICK_BTN_H);
+    }
+
+    CCRect tickValueRect(int row) {
+        return CCRect(TICK_VALUE_X, tickRowY(row) - TICK_BTN_H * 0.5f, TICK_VALUE_W, TICK_BTN_H);
+    }
+
+    // draggable hit area over the timing bar of a custom stage
+    CCRect tickSliderRect(int row) {
+        return CCRect(STAGE_BAR_X - 10.f, tickRowY(row) - 15.f, STAGE_BAR_WIDTH + 20.f, 30.f);
     }
 
     CCRect stageSlotRect(int index) {
@@ -2582,8 +2697,14 @@ finally {
         return names[index];
     }
 
+    // small credits button, pinned to the top right of the settings card
+    CCRect creditsRect() {
+        return CCRect(CONTENT_RIGHT - 20.f - 62.f, LOG_HEADER_Y - 12.f, 62.f, 24.f);
+    }
+
     CCRect configButtonRect(int index) {
-        float x = (index == 0) ? CONFIG_BUTTON_X : CONFIG_EXPORT_X;
+        float x = (index == 0) ? CONFIG_BUTTON_X
+            : (index == 1 ? CONFIG_EXPORT_X : CONFIG_EXPORT_X + CONFIG_BUTTON_WIDTH + CONFIG_BUTTON_GAP);
         return CCRect(x, CONFIG_BUTTON_Y - CONFIG_BUTTON_HEIGHT * 0.5f, CONFIG_BUTTON_WIDTH, CONFIG_BUTTON_HEIGHT);
     }
 
@@ -2610,12 +2731,30 @@ finally {
         if (index >= 0 && index < STAGE_TABLE_SIZE) {
             return stageName(index);
         }
+        static char const* customNames[CUSTOM_STAGE_LIMIT] = { "c1", "c2", "c3", "c4" };
         loadCustomStages();
         int custom = index - STAGE_TABLE_SIZE;
-        if (custom >= 0 && custom < static_cast<int>(g_customStages.size())) {
-            return g_customStages[custom].c_str();
+        if (custom >= 0 && custom < static_cast<int>(g_customStages.size()) && custom < CUSTOM_STAGE_LIMIT) {
+            return customNames[custom];
         }
         return "?";
+    }
+
+    std::string stageTitleAt(int index) {
+        if (index >= STAGE_TABLE_SIZE) {
+            return fmt::format("custom {}", index - STAGE_TABLE_SIZE + 1);
+        }
+        return stageLabelAt(index);
+    }
+
+    void fitLabelToWidth(CCLabelBMFont* label, float maxWidth) {
+        if (!label || maxWidth <= 0.f) {
+            return;
+        }
+        float width = label->getContentSize().width * label->getScale();
+        if (width > maxWidth && width > 0.f) {
+            label->setScale(label->getScale() * maxWidth / width);
+        }
     }
     CCNode* makeDeckButton(CCNode* parent, CCRect const& rect, std::string const& text, bool isFilled, bool useDisplayFont, float fontScale, bool isTinted = false) {
         auto* button = CCNode::create();
@@ -2625,7 +2764,7 @@ finally {
 
         ccColor4F transparent = color4(0, 0, 0, 0);
         auto* background = makeDrawNode();
-        float radius = rect.size.height * 0.44f;
+        float radius = std::min(rect.size.height * 0.25f, 7.f);
         if (isFilled) {
             drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(accentColor(), 238), color4(255, 255, 255, 44), 1.f);
         }
@@ -2658,7 +2797,7 @@ finally {
         drawCurvedRect(
             background,
             CCRect(0.f, 0.f, rect.size.width, rect.size.height),
-            12.f,
+            6.f,
             color4(255, 255, 255, 6),
             color4(255, 255, 255, 18),
             1.f
@@ -2727,6 +2866,175 @@ finally {
         return nullptr;
     }
 
+    // ---- first-open tutorial ------------------------------------------------
+    constexpr char const* TUTORIAL_DONE_KEY = "tutorial-done";
+    constexpr float TUTORIAL_CARD_W = 410.f;
+
+    // things the tour can point at
+    constexpr int TF_NONE = -1;
+    constexpr int TF_LOGO = 0;
+    constexpr int TF_HEADER = 1;
+    constexpr int TF_DISMISS = 2;
+    constexpr int TF_TAB0 = 3;
+    constexpr int TF_TAB1 = 4;
+    constexpr int TF_TAB2 = 5;
+    constexpr int TF_LOGPANE = 6;
+    constexpr int TF_COPY = 7;
+    constexpr int TF_STAGETRACK = 8;
+    constexpr int TF_CUSTOM = 9;
+    constexpr int TF_SLIDER = 10;
+    constexpr int TF_SWATCHES = 11;
+    constexpr int TF_CONFIG = 12;
+
+    struct TutorialStep {
+        std::string title;
+        int tab; // tab to show right away, -1 keeps the current one
+        std::vector<std::string> lines;
+        int cursor;  // where the cursor flies to (TF_NONE hides it)
+        bool tap;    // true: the cursor taps what it points at
+        int focus;   // what stays lit once the cursor arrives
+        int cursor2; // optional second stop after a short pause
+    };
+
+    std::vector<TutorialStep> tutorialSteps() {
+        bool const mobile = isMobileHost();
+        std::vector<TutorialStep> steps;
+        steps.push_back({ "welcome to afterflow", -1, {
+            "afterflow fixes your early clicks so they land",
+            "accurately. this quick tour shows what each tab",
+            "does, and you can skip it right now.",
+        }, TF_NONE, false, TF_LOGO, TF_NONE });
+        steps.push_back({ "the panel", 0, {
+            "the game pauses while this panel is open.",
+            mobile ? std::string("close it any time with the x in the top right.")
+                   : fmt::format("close it with the x or {}.", panelKey()),
+            "the text up top shows whether the buffer is on.",
+            "tap the afterflow logo any time to replay this tour.",
+        }, TF_DISMISS, false, TF_HEADER, TF_NONE });
+        TutorialStep logStep{ "log tab", -1, {
+            "a live feed of what afterflow is doing:",
+            "stage changes, predictions and update checks.",
+            "copy puts the whole log on your clipboard.",
+            "the chips at the bottom show which extras are on:",
+            "console, wave and path.",
+        }, TF_TAB0, true, TF_LOGPANE, TF_COPY };
+        if (!mobile) {
+            logStep.lines.push_back("terminal opens the log in its own window.");
+        }
+        steps.push_back(logStep);
+        steps.push_back({ "stage tab", -1, {
+            "a stage is how far afterflow may delay a click to fix it.",
+            "the numbers are ticks: 4 ticks is one frame at 60 fps.",
+            "a higher stage can correct earlier clicks.",
+            mobile ? std::string("tap a stage to switch to it.")
+                   : fmt::format("tap a stage to switch, or press {} to cycle.", stageKey()),
+            "the last stage is off, so your clicks are left untouched.",
+        }, TF_TAB1, true, TF_STAGETRACK, TF_NONE });
+        steps.push_back({ "custom stages", 1, {
+            "tap + custom to copy the selected stage (up to 4).",
+            "then drag the slider, tap the number and type, or use",
+            "-5 / -1 / +1 / +5 to set the delay for all and wave.",
+            "remove deletes the selected custom stage.",
+            "going over 120 ticks may lag or work worse.",
+        }, TF_CUSTOM, false, TF_CUSTOM, TF_SLIDER });
+        steps.push_back({ "settings tab", -1, {
+            "pick a theme to change the panel colors.",
+            "glow turns the soft glow behind the panel on or off.",
+            "terminal shows or hides the terminal button (pc only).",
+            "credits (top right) shows who helped make this.",
+            "export copies your tuning as json, import loads it back.",
+        }, TF_TAB2, true, TF_SWATCHES, TF_CONFIG });
+        steps.push_back({ "you're all set", -1, {
+            "that's everything.",
+            "tap the afterflow logo any time to see this tour again.",
+        }, TF_NONE, false, TF_LOGO, TF_NONE });
+        return steps;
+    }
+
+    float tutorialCardHeight(size_t lineCount) {
+        return 142.f + 22.f * static_cast<float>(lineCount);
+    }
+
+    // card-local buttons, origin is the card's bottom left corner
+    CCRect tutorialSkipRect(CCPoint const& origin) {
+        return CCRect(origin.x + 22.f, origin.y + 16.f, 100.f, 32.f);
+    }
+
+    CCRect tutorialNextRect(CCPoint const& origin) {
+        return CCRect(origin.x + TUTORIAL_CARD_W - 22.f - 120.f, origin.y + 16.f, 120.f, 32.f);
+    }
+
+    CCRect logoRect() {
+        return CCRect(MARGIN, HEADER_Y - 20.f, 150.f, 40.f);
+    }
+
+    CCRect tutorialRectFor(int kind) {
+        switch (kind) {
+            case TF_LOGO: return logoRect();
+            case TF_HEADER: return CCRect(CONTENT_RIGHT - 190.f, HEADER_Y - 18.f, 190.f, 36.f);
+            case TF_DISMISS: return CCRect(DISMISS_X, DISMISS_Y, DISMISS_WIDTH, DISMISS_HEIGHT);
+            case TF_TAB0:
+            case TF_TAB1:
+            case TF_TAB2: return tabSlotRect(kind - TF_TAB0);
+            case TF_LOGPANE: return CCRect(LOG_X, 250.f, LOG_WIDTH, CARD_TOP - 250.f);
+            case TF_COPY: return CCRect(COPY_X, COPY_Y, COPY_WIDTH, COPY_HEIGHT);
+            case TF_STAGETRACK: return CCRect(STAGE_TRACK_X, STAGE_TRACK_Y, STAGE_TRACK_WIDTH, STAGE_TRACK_HEIGHT);
+            case TF_CUSTOM: return customAddRect();
+            case TF_SLIDER: return CCRect(
+                STAGE_BAR_X - 2.f, STAGE_TIMING_WAVE_Y - 20.f,
+                STAGE_BAR_WIDTH + 14.f, STAGE_TIMING_ALL_Y - STAGE_TIMING_WAVE_Y + 40.f
+            );
+            case TF_SWATCHES: return CCRect(
+                SWATCH_X, SWATCH_Y,
+                static_cast<float>(THEME_COUNT) * SWATCH_WIDTH + static_cast<float>(THEME_COUNT - 1) * SWATCH_GAP,
+                SWATCH_HEIGHT
+            );
+            case TF_CONFIG: {
+                auto first = configButtonRect(0);
+                auto second = configButtonRect(1);
+                float left = std::min(first.getMinX(), second.getMinX());
+                float right = std::max(first.getMaxX(), second.getMaxX());
+                return CCRect(left, first.getMinY(), right - left, first.size.height);
+            }
+            default: return CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT);
+        }
+    }
+
+    CCRect padRect(CCRect const& rect, float pad) {
+        return CCRect(rect.origin.x - pad, rect.origin.y - pad, rect.size.width + pad * 2.f, rect.size.height + pad * 2.f);
+    }
+
+    float rectOverlapArea(CCRect const& first, CCRect const& second) {
+        float width = std::min(first.getMaxX(), second.getMaxX()) - std::max(first.getMinX(), second.getMinX());
+        float height = std::min(first.getMaxY(), second.getMaxY()) - std::max(first.getMinY(), second.getMinY());
+        return (width > 0.f && height > 0.f) ? width * height : 0.f;
+    }
+
+    // picks the spot for the tour card that covers the least of what is lit
+    CCPoint tutorialPickCardOrigin(float height, std::vector<CCRect> const& avoid, bool centered) {
+        float const xs[3] = { (DECK_WIDTH - TUTORIAL_CARD_W) * 0.5f, 12.f, DECK_WIDTH - 12.f - TUTORIAL_CARD_W };
+        if (centered) {
+            return CCPoint(xs[0], (DECK_HEIGHT - height) * 0.5f);
+        }
+        float const ys[2] = { 10.f, DECK_HEIGHT - 10.f - height };
+        CCPoint best(xs[0], ys[0]);
+        float bestScore = 1e9f;
+        for (float y : ys) {
+            for (float x : xs) {
+                CCRect card(x, y, TUTORIAL_CARD_W, height);
+                float score = 0.f;
+                for (auto const& rect : avoid) {
+                    score += rectOverlapArea(card, padRect(rect, 4.f));
+                }
+                if (score < bestScore - 0.5f) {
+                    bestScore = score;
+                    best = CCPoint(x, y);
+                }
+            }
+        }
+        return best;
+    }
+
     class AfterflowOverlay : public CCLayer {
     public:
         static AfterflowOverlay* create();
@@ -2762,9 +3070,18 @@ finally {
             SettingsRow,
             ImportConfig,
             ExportConfig,
+            ReplayTutorial,
+            Credits,
             ModeIcon,
             ModeIconAdd,
             StageAdd,
+            CustomRemove,
+            TickAdjust,
+            TickField,
+            TickSlider,
+            TutorialSkip,
+            TutorialNext,
+            Logo,
         };
 
         void buildDeck();
@@ -2784,6 +3101,21 @@ finally {
         void pressTarget(HitTarget target);
         void restorePressed();
         void performTarget(HitTarget target);
+        void startTutorial();
+        void showTutorialStep();
+        void advanceTutorial();
+        void finishTutorial();
+        void buildTutorialLayer();
+        void beginTutorialMotion(TutorialStep const& step);
+        void tutorialFrame(float dt);
+        void clearTutorialLayer();
+        void drawTabIndicator();
+        void animTick(float dt);
+        HitTarget tutorialHit(CCPoint const& point) const;
+        void beginTickEdit(int row);
+        void endTickEdit();
+        void onTickInput(int row, std::string const& text);
+        void setSliderFromX(float x);
         void copyLog();
         void pauseForPanel();
         void resumeFromPanel();
@@ -2826,6 +3158,49 @@ finally {
         CCLabelBMFont* m_toolsTitleLabels[3] = {};
         CCLabelBMFont* m_toolsDescLabels[3] = {};
         CCLabelBMFont* m_stageTimingLabels[4] = {};
+        CCLabelBMFont* m_tickBtnLabels[8] = {};
+        CCLabelBMFont* m_tickValueLabels[2] = {};
+        CCNode* m_tutorialLayer = nullptr;
+        int m_tutorialStep = -1;
+        // tour animation state
+        CCDrawNode* m_tutShade = nullptr;
+        CCDrawNode* m_tutFx = nullptr;
+        CCDrawNode* m_tutCursor = nullptr;
+        CCDrawNode* m_tutProgress = nullptr;
+        CCNode* m_tutCard = nullptr;
+        CCRect m_tutSpot = CCRect(0.f, 0.f, 0.f, 0.f);
+        CCRect m_tutSpotTarget = CCRect(0.f, 0.f, 0.f, 0.f);
+        CCPoint m_tutCardTarget = CCPoint(0.f, 0.f);
+        CCPoint m_tutCursorPos = CCPoint(0.f, 0.f);
+        float m_tutCardH = 200.f;
+        float m_tutTime = 0.f;
+        float m_tutAlpha = 0.f;
+        float m_tutCursorVis = 0.f;
+        float m_tutProgShown = 0.f;
+        float m_tutRippleT = -1.f;
+        float m_tutPhaseTime = 0.f;
+        int m_tutPhase = 2; // 0 flying, 1 tapping, 2 settled
+        int m_tutKindNow = -1;
+        int m_tutFocusNow = -1;
+        int m_tutKind2 = -1;
+        int m_tutTotal = 1;
+        bool m_tutTapNow = false;
+        bool m_tutActionDone = false;
+        bool m_tutClosing = false;
+        // ui animation state
+        float m_tabIndX = -1.f;
+        float m_tabIndTarget = 0.f;
+        int m_lastAppliedTab = -1;
+        float m_barShown[2] = { -1.f, -1.f };
+        float m_barTarget[2] = { 0.f, 0.f };
+        TextInput* m_tickInputs[2] = {};
+        int m_editingRow = -1;
+        bool m_suppressTickInput = false;
+        bool m_draggingSlider = false;
+        bool m_sliderStartedOver = false;
+        int m_sliderRow = -1;
+        CCLabelBMFont* m_customAddLabel = nullptr;
+        CCLabelBMFont* m_customRemoveLabel = nullptr;
         CCLabelBMFont* m_settingsHeaderLabel = nullptr;
         CCLabelBMFont* m_settingsValueLabels[2] = {};
         CCLabelBMFont* m_settingsHintLabel = nullptr;
@@ -2842,6 +3217,8 @@ finally {
         CCLabelBMFont* m_configStatusLabel = nullptr;
         CCNode* m_importButton = nullptr;
         CCNode* m_exportButton = nullptr;
+        CCNode* m_tutorialButton = nullptr;
+        CCNode* m_creditsButton = nullptr;
         int m_activeTab = 0;
         CCDrawNode* m_chipBar = nullptr;
         CCLabelBMFont* m_chipLabels[CHIP_COUNT] = {};
@@ -2962,9 +3339,29 @@ finally {
         m_configStatusLabel = nullptr;
         m_importButton = nullptr;
         m_exportButton = nullptr;
+        m_tutorialButton = nullptr;
+        m_creditsButton = nullptr;
         m_modeIcons.clear();
         for (int index = 0; index < LOG_LINE_COUNT; ++index) { m_activityLines[index] = nullptr; }
         for (int index = 0; index < STAGE_MAX_STAGES; ++index) { m_stageNameLabels[index] = nullptr; }
+        for (int index = 0; index < 8; ++index) { m_tickBtnLabels[index] = nullptr; }
+        for (int index = 0; index < 2; ++index) { m_tickValueLabels[index] = nullptr; }
+        for (int index = 0; index < 2; ++index) { m_tickInputs[index] = nullptr; }
+        m_tutorialLayer = nullptr;
+        m_tutShade = nullptr;
+        m_tutFx = nullptr;
+        m_tutCursor = nullptr;
+        m_tutProgress = nullptr;
+        m_tutCard = nullptr;
+        m_tutClosing = false;
+        m_tabIndX = -1.f;
+        m_lastAppliedTab = -1;
+        m_barShown[0] = -1.f;
+        m_barShown[1] = -1.f;
+        m_editingRow = -1;
+        m_draggingSlider = false;
+        m_customAddLabel = nullptr;
+        m_customRemoveLabel = nullptr;
         for (int index = 0; index < TAB_COUNT; ++index) { m_tabLabels[index] = nullptr; }
         for (int index = 0; index < CHIP_COUNT; ++index) { m_chipLabels[index] = nullptr; }
         for (int index = 0; index < 4; ++index) {
@@ -3003,7 +3400,7 @@ finally {
 
         m_shell = makeDrawNode();
         m_deck->addChild(m_shell, 1);
-        drawCurvedRect(m_shell, CCRect(-12.f, -22.f, DECK_WIDTH + 24.f, DECK_HEIGHT + 22.f), DECK_RADIUS + 14.f, color4(0, 0, 0, 72), none, 0.f);
+        drawCurvedRect(m_shell, CCRect(-12.f, -22.f, DECK_WIDTH + 24.f, DECK_HEIGHT + 22.f), DECK_RADIUS + 6.f, color4(0, 0, 0, 72), none, 0.f);
         drawCurvedRect(m_shell, CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT), DECK_RADIUS, color4(shellTint, 252), color4(255, 255, 255, 26), 1.f);
         drawCurvedRect(m_shell, CCRect(CONTENT_X, CARD_BOTTOM, CONTENT_WIDTH, CARD_HEIGHT), CARD_RADIUS, color4(surface, 255), color4(255, 255, 255, 18), 1.f);
 
@@ -3090,12 +3487,6 @@ finally {
         m_stageIndexLabel->setPosition(CCPoint(CONTENT_RIGHT - 22.f, STAGE_NAME_Y));
         m_deck->addChild(m_stageIndexLabel, 3);
 
-        if (auto* addStage = makeLabel("+", false, 0.62f, accentColor())) {
-            addStage->setAnchorPoint(CCPoint(0.5f, 0.5f));
-            addStage->setPosition(CCPoint(CONTENT_RIGHT - 68.f, STAGE_NAME_Y));
-            m_deck->addChild(addStage, 3);
-        }
-
         m_stageDescriptionLabel = makeLabel("", false, 0.74f, softTextColor());
         m_stageDescriptionLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
         m_stageDescriptionLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_META_Y));
@@ -3115,13 +3506,15 @@ finally {
             m_stageNameLabels[index] = nameLabel;
         }
 
-        if (auto* allLabel = makeLabel("all modes", false, 0.74f, softTextColor())) {
+        if (auto* allLabel = makeLabel("all modes", false, 0.66f, softTextColor())) {
+            fitLabelToWidth(allLabel, TICK_LABEL_MAX_WIDTH);
             allLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
             allLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_TIMING_ALL_Y));
             m_deck->addChild(allLabel, 3);
             m_stageTimingLabels[0] = allLabel;
         }
-        if (auto* waveLabel = makeLabel("wave", false, 0.74f, softTextColor())) {
+        if (auto* waveLabel = makeLabel("wave", false, 0.66f, softTextColor())) {
+            fitLabelToWidth(waveLabel, TICK_LABEL_MAX_WIDTH);
             waveLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
             waveLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_TIMING_WAVE_Y));
             m_deck->addChild(waveLabel, 3);
@@ -3132,6 +3525,50 @@ finally {
             hint->setPosition(CCPoint(LOG_X + 22.f, STAGE_HINT_Y));
             m_deck->addChild(hint, 3);
             m_stageTimingLabels[2] = hint;
+        }
+
+        for (int row = 0; row < 2; ++row) {
+            auto valueRect = tickValueRect(row);
+            if (auto* valueLabel = makeLabel("0t", true, 0.62f, color3(240, 241, 246))) {
+                valueLabel->setPosition(CCPoint(valueRect.getMidX(), valueRect.getMidY()));
+                m_deck->addChild(valueLabel, 3);
+                m_tickValueLabels[row] = valueLabel;
+            }
+            if (auto* tickInput = TextInput::create(TICK_VALUE_W - 6.f, "ticks")) {
+                tickInput->setFilter("0123456789");
+                tickInput->setMaxCharCount(3);
+                tickInput->setPosition(CCPoint(valueRect.getMidX(), valueRect.getMidY()));
+                tickInput->setVisible(false);
+                tickInput->setCallback([this, row](std::string const& text) {
+                    this->onTickInput(row, text);
+                });
+                m_deck->addChild(tickInput, 4);
+                m_tickInputs[row] = tickInput;
+            }
+            static char const* glyphs[4] = { "-5", "-1", "+1", "+5" };
+            for (int which = 0; which < 4; ++which) {
+                auto buttonRect = tickButtonRect(row, which);
+                if (auto* glyph = makeLabel(glyphs[which], false, 0.62f, accentColor())) {
+                    fitLabelToWidth(glyph, TICK_BTN_W - 8.f);
+                    glyph->setPosition(CCPoint(buttonRect.getMidX(), buttonRect.getMidY()));
+                    m_deck->addChild(glyph, 3);
+                    m_tickBtnLabels[row * 4 + which] = glyph;
+                }
+            }
+        }
+        if (auto* addLabel = makeLabel("+ custom", false, 0.62f, accentColor())) {
+            auto addRect = customAddRect();
+            fitLabelToWidth(addLabel, addRect.size.width - 12.f);
+            addLabel->setPosition(CCPoint(addRect.getMidX(), addRect.getMidY()));
+            m_deck->addChild(addLabel, 3);
+            m_customAddLabel = addLabel;
+        }
+        if (auto* removeLabel = makeLabel("remove", false, 0.62f, warningColor())) {
+            auto removeRect = customRemoveRect();
+            fitLabelToWidth(removeLabel, removeRect.size.width - 12.f);
+            removeLabel->setPosition(CCPoint(removeRect.getMidX(), removeRect.getMidY()));
+            m_deck->addChild(removeLabel, 3);
+            m_customRemoveLabel = removeLabel;
         }
 
         // ---- settings pane ----------------------------------------------------
@@ -3146,7 +3583,7 @@ finally {
             drawCurvedRect(
                 m_settingsBar,
                 settingsRowRect(row),
-                12.f,
+                7.f,
                 color4(255, 255, 255, 8),
                 color4(255, 255, 255, 22),
                 1.f
@@ -3167,7 +3604,7 @@ finally {
             drawCurvedRect(
                 m_themeSwatches,
                 rect,
-                11.f,
+                6.f,
                 color4(themeSurface, 255),
                 selected ? color4(accentColor(), 235) : color4(255, 255, 255, 34),
                 selected ? 2.f : 1.f
@@ -3199,29 +3636,44 @@ finally {
             }
         }
 
-        m_modeIconContainer = CCNode::create();
-        m_modeIconContainer->setAnchorPoint(CCPoint(0.f, 0.5f));
-        m_modeIconContainer->setPosition(CCPoint(MODE_ICON_X, MODE_ICON_Y));
-        m_modeIconContainer->setContentSize(CCSize(MODE_ICON_STEP * static_cast<float>(modeSlots().size() + 1), MODE_ICON_SIZE));
-        m_deck->addChild(m_modeIconContainer, 3);
-
         m_importButton = makeDeckButton(m_deck, configButtonRect(0), "import", false, false, 0.58f);
         m_exportButton = makeDeckButton(m_deck, configButtonRect(1), "export", false, false, 0.58f);
+        m_tutorialButton = makeDeckButton(m_deck, configButtonRect(2), "tutorial", false, false, 0.58f, true);
 
         m_configStatusLabel = makeLabel("", false, 0.54f, faintTextColor());
         m_configStatusLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
-        m_configStatusLabel->setPosition(CCPoint(configButtonRect(1).getMaxX() + 14.f, CONFIG_BUTTON_Y));
+        m_configStatusLabel->setPosition(CCPoint(configButtonRect(2).getMaxX() + 14.f, CONFIG_BUTTON_Y));
         m_deck->addChild(m_configStatusLabel, 3);
 
-        updateModeIcons();
+        {
+            // small yellow credits button, always pinned top right of settings
+            auto rect = creditsRect();
+            auto* button = CCNode::create();
+            button->setContentSize(CCSize(rect.size.width, rect.size.height));
+            button->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            button->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
+            auto* back = makeDrawNode();
+            ccColor3B gold = color3(255, 214, 72);
+            drawCurvedRect(back, CCRect(0.f, 0.f, rect.size.width, rect.size.height), 6.f, color4(gold, 34), color4(gold, 130), 1.f);
+            button->addChild(back);
+            if (auto* label = makeLabel("credits", false, 0.5f, gold)) {
+                label->setPosition(CCPoint(rect.size.width * 0.5f, rect.size.height * 0.5f));
+                fitLabelToWidth(label, rect.size.width - 10.f);
+                button->addChild(label);
+            }
+            m_deck->addChild(button, 4);
+            m_creditsButton = button;
+        }
 
         applyTab();
+        buildTutorialLayer();
     }
 
     void AfterflowOverlay::rebuildDeck() {
         if (!m_deck) {
             return;
         }
+        endTickEdit();
         m_pressedTarget = HitTarget::None;
         m_pressedNode = nullptr;
         m_deck->removeAllChildrenWithCleanup(true);
@@ -3318,7 +3770,7 @@ finally {
             float dotX = cell.getMinX() + 12.f;
             float dotY = cell.getMidY();
             bool isOn = values[index];
-            float radius = 9.f;
+            float radius = 5.f;
             if (isOn) {
                 drawCurvedRect(m_chipBar, cell, radius, color4(accentColor(), 34), color4(accentColor(), 120), 1.f);
                 m_chipBar->drawCircle(CCPoint(dotX, dotY), 4.f, color4(accentColor(), 255), 0.f, color4(0, 0, 0, 0), 18);
@@ -3339,25 +3791,27 @@ finally {
         if (m_activeTab >= TAB_COUNT) { m_activeTab = TAB_COUNT - 1; }
 
         if (m_tabBar) {
-            m_tabBar->clear();
             auto slot = tabSlotRect(m_activeTab);
-            drawCurvedRect(
-                m_tabBar,
-                CCRect(slot.getMinX() + 18.f, TAB_LABEL_Y - 17.f, slot.size.width - 36.f, 34.f),
-                17.f,
-                color4(accentColor(), 26),
-                color4(accentColor(), 74),
-                1.f
-            );
+            m_tabIndTarget = slot.getMinX() + 18.f;
+            if (m_tabIndX < 0.f || !m_isOpen) {
+                m_tabIndX = m_tabIndTarget;
+            }
+            drawTabIndicator();
         }
 
         for (int index = 0; index < TAB_COUNT; ++index) {
             if (m_tabLabels[index]) {
                 bool isActive = index == m_activeTab;
+                m_tabLabels[index]->stopAllActions();
                 m_tabLabels[index]->setColor(isActive ? color3(244, 245, 250) : faintTextColor());
                 m_tabLabels[index]->setOpacity(isActive ? 255 : 185);
+                if (isActive && m_lastAppliedTab >= 0 && m_lastAppliedTab != m_activeTab && m_isOpen) {
+                    m_tabLabels[index]->setOpacity(110);
+                    m_tabLabels[index]->runAction(CCFadeTo::create(0.22f, 255));
+                }
             }
         }
+        m_lastAppliedTab = m_activeTab;
 
         bool const showLog = m_activeTab == 0;
         bool const showStage = m_activeTab == 1;
@@ -3381,6 +3835,16 @@ finally {
             if (m_stageTimingLabels[i]) { m_stageTimingLabels[i]->setVisible(showStage); }
         }
         if (m_stageTrack) { m_stageTrack->setVisible(showStage); }
+        for (int i = 0; i < 2; ++i) {
+            bool customShown = showStage && customStageFor(state.stageIndex);
+            if (m_tickValueLabels[i]) { m_tickValueLabels[i]->setVisible(showStage && !customShown); }
+            if (m_tickInputs[i]) { m_tickInputs[i]->setVisible(customShown); }
+        }
+        for (int i = 0; i < 8; ++i) {
+            if (m_tickBtnLabels[i]) { m_tickBtnLabels[i]->setVisible(showStage && customStageFor(state.stageIndex)); }
+        }
+        if (m_customAddLabel) { m_customAddLabel->setVisible(showStage); }
+        if (m_customRemoveLabel) { m_customRemoveLabel->setVisible(showStage && customStageFor(state.stageIndex)); }
         if (m_stageBackButton) { m_stageBackButton->setVisible(false); }
         if (m_stageForwardButton) { m_stageForwardButton->setVisible(false); }
 
@@ -3391,6 +3855,8 @@ finally {
         if (m_modeIconContainer) { m_modeIconContainer->setVisible(showSettings); }
         if (m_importButton) { m_importButton->setVisible(showSettings); }
         if (m_exportButton) { m_exportButton->setVisible(showSettings); }
+        if (m_tutorialButton) { m_tutorialButton->setVisible(showSettings); }
+        if (m_creditsButton) { m_creditsButton->setVisible(showSettings); }
         if (m_configStatusLabel) { m_configStatusLabel->setVisible(showSettings); }
         for (int i = 0; i < 2; ++i) {
             if (m_settingsValueLabels[i]) { m_settingsValueLabels[i]->setVisible(showSettings); }
@@ -3414,7 +3880,7 @@ finally {
             m_stageIndexLabel->setColor(live);
         }
         if (m_stageNameLabel) {
-            m_stageNameLabel->setString(stageLabelAt(state.stageIndex));
+            m_stageNameLabel->setString(stageTitleAt(state.stageIndex).c_str());
             m_stageNameLabel->setColor(state.isEnabled ? color3(240, 241, 246) : warningColor());
         }
         if (m_stageDescriptionLabel) {
@@ -3440,7 +3906,7 @@ finally {
                 drawCurvedRect(
                     m_statusBeacon,
                     CCRect(pillX, centerY - STATUS_HEIGHT * 0.5f, pillWidth, STATUS_HEIGHT),
-                    STATUS_HEIGHT * 0.5f,
+                    7.f,
                     color4(255, 255, 255, 8),
                     color4(255, 255, 255, 20),
                     1.f
@@ -3455,7 +3921,7 @@ finally {
             drawCurvedRect(
                 m_stageTrack,
                 CCRect(STAGE_TRACK_X, STAGE_TRACK_Y, STAGE_TRACK_WIDTH, STAGE_TRACK_HEIGHT),
-                STAGE_TRACK_HEIGHT * 0.5f,
+                8.f,
                 color4(255, 255, 255, 7),
                 color4(255, 255, 255, 14),
                 1.f
@@ -3466,7 +3932,7 @@ finally {
             drawCurvedRect(
                 m_stageTrack,
                 stageCellRect(state.stageIndex),
-                10.f,
+                6.f,
                 color4(selectedTint, 48),
                 color4(selectedTint, 150),
                 1.f
@@ -3483,36 +3949,212 @@ finally {
                 nameLabel->setOpacity(isSelected ? 255 : 205);
             }
 
-            float barHeight = 10.f;
-            auto drawBar = [&](float y, int ticks, ccColor3B tint) {
+            auto* customStage = customStageFor(state.stageIndex);
+            bool const isCustomSelected = customStage != nullptr;
+            bool const showStageTab = m_activeTab == 1;
+
+            int shownAll = state.isEnabled ? state.ticksAllModes : 0;
+            int shownWave = state.isEnabled ? state.ticksWaveMode : 0;
+            int barMax = isCustomSelected ? CUSTOM_TICKS_MAX : std::max({ 40, shownAll, shownWave });
+
+            float const barHeight = 8.f;
+            m_barTarget[0] = static_cast<float>(shownAll);
+            m_barTarget[1] = static_cast<float>(shownWave);
+            for (int barIndex = 0; barIndex < 2; ++barIndex) {
+                if (m_barShown[barIndex] < 0.f || m_draggingSlider || !m_isOpen) {
+                    m_barShown[barIndex] = m_barTarget[barIndex];
+                }
+            }
+            auto drawBar = [&](int barIndex, float y, ccColor3B tint) {
+                float const ticks = m_barShown[barIndex];
+                // dark track with a faint outline
                 drawCurvedRect(
                     m_stageTrack,
                     CCRect(STAGE_BAR_X, y - barHeight * 0.5f, STAGE_BAR_WIDTH, barHeight),
-                    barHeight * 0.5f,
-                    color4(255, 255, 255, 12),
-                    color4(0, 0, 0, 0),
-                    0.f
+                    3.5f,
+                    color4(0, 0, 0, 70),
+                    color4(255, 255, 255, 22),
+                    1.f
                 );
-                float ratio = std::clamp(static_cast<float>(ticks) / 4.f, 0.04f, 1.f);
+                if (ticks > 0.5f) {
+                    float ratio = std::clamp(ticks / static_cast<float>(barMax), 0.03f, 1.f);
+                    if (isCustomSelected) {
+                        // custom stages use the same 1..CUSTOM_TICKS_MAX mapping as the slider
+                        ratio = std::clamp(
+                            (ticks - static_cast<float>(CUSTOM_TICKS_MIN)) / static_cast<float>(CUSTOM_TICKS_MAX - CUSTOM_TICKS_MIN),
+                            0.f, 1.f
+                        );
+                    }
+                    float fillWidth = std::max(8.f, STAGE_BAR_WIDTH * ratio);
+                    // soft glow behind the fill
+                    drawCurvedRect(
+                        m_stageTrack,
+                        CCRect(STAGE_BAR_X - 1.5f, y - barHeight * 0.5f - 2.5f, fillWidth + 3.f, barHeight + 5.f),
+                        5.f,
+                        color4(tint, 38),
+                        color4(0, 0, 0, 0),
+                        0.f
+                    );
+                    // solid neon fill
+                    drawCurvedRect(
+                        m_stageTrack,
+                        CCRect(STAGE_BAR_X, y - barHeight * 0.5f, fillWidth, barHeight),
+                        3.5f,
+                        color4(tint, 255),
+                        color4(tint, 255),
+                        1.f
+                    );
+                    // bright core line through the middle, like the old bar
+                    if (fillWidth > 10.f) {
+                        drawCurvedRect(
+                            m_stageTrack,
+                            CCRect(STAGE_BAR_X + 3.f, y - 1.25f, fillWidth - 6.f, 2.5f),
+                            1.2f,
+                            color4(255, 255, 255, 120),
+                            color4(0, 0, 0, 0),
+                            0.f
+                        );
+                    }
+                    if (isCustomSelected) {
+                        // slim glowing handle so it reads as draggable
+                        float knobX = STAGE_BAR_X + STAGE_BAR_WIDTH * ratio;
+                        drawCurvedRect(
+                            m_stageTrack,
+                            CCRect(knobX - 5.f, y - 11.f, 10.f, 22.f),
+                            4.f,
+                            color4(tint, 55),
+                            color4(0, 0, 0, 0),
+                            0.f
+                        );
+                        drawCurvedRect(
+                            m_stageTrack,
+                            CCRect(knobX - 3.f, y - 9.f, 6.f, 18.f),
+                            2.8f,
+                            color4(235, 255, 250, 255),
+                            color4(tint, 255),
+                            1.f
+                        );
+                    }
+                }
+            };
+            drawBar(0, STAGE_TIMING_ALL_Y, live);
+            drawBar(1, STAGE_TIMING_WAVE_Y, live);
+
+            // value boxes
+            for (int row = 0; row < 2; ++row) {
                 drawCurvedRect(
                     m_stageTrack,
-                    CCRect(STAGE_BAR_X, y - barHeight * 0.5f, STAGE_BAR_WIDTH * ratio, barHeight),
-                    barHeight * 0.5f,
-                    color4(tint, 225),
-                    color4(0, 0, 0, 0),
-                    0.f
+                    tickValueRect(row),
+                    6.f,
+                    color4(255, 255, 255, 8),
+                    color4(255, 255, 255, 24),
+                    1.f
                 );
-            };
-            drawBar(STAGE_TIMING_ALL_Y, state.isEnabled ? state.ticksAllModes : 0, live);
-            drawBar(STAGE_TIMING_WAVE_Y, state.isEnabled ? state.ticksWaveMode : 0, live);
+                if (m_tickValueLabels[row]) {
+                    int ticks = row == 0 ? shownAll : shownWave;
+                    m_tickValueLabels[row]->setScale(0.62f * getUIFontScale());
+                    m_tickValueLabels[row]->setString(state.isEnabled ? fmt::format("{}t", ticks).c_str() : "off");
+                    m_tickValueLabels[row]->setColor(state.isEnabled ? color3(240, 241, 246) : warningColor());
+                    fitLabelToWidth(m_tickValueLabels[row], TICK_VALUE_W - 10.f);
+                    m_tickValueLabels[row]->setVisible(showStageTab && !isCustomSelected);
+                }
+                if (auto* tickInput = m_tickInputs[row]) {
+                    bool inputShown = showStageTab && isCustomSelected;
+                    tickInput->setVisible(inputShown);
+                    if (inputShown && row != m_editingRow) {
+                        auto wanted = fmt::format("{}", row == 0 ? customStage->ticksAll : customStage->ticksWave);
+                        if (tickInput->getString() != wanted) {
+                            m_suppressTickInput = true;
+                            tickInput->setString(wanted);
+                            m_suppressTickInput = false;
+                        }
+                    }
+                    if (!inputShown && m_editingRow == row) {
+                        endTickEdit();
+                    }
+                }
+            }
+
+            // -5 / -1 / +1 / +5 buttons, only for custom stages
+            for (int row = 0; row < 2; ++row) {
+                int ticks = isCustomSelected ? (row == 0 ? customStage->ticksAll : customStage->ticksWave) : 0;
+                for (int which = 0; which < 4; ++which) {
+                    auto* glyph = m_tickBtnLabels[row * 4 + which];
+                    if (glyph) {
+                        glyph->setVisible(showStageTab && isCustomSelected);
+                    }
+                    if (!isCustomSelected) {
+                        continue;
+                    }
+                    bool atLimit = (which < 2) ? ticks <= CUSTOM_TICKS_MIN : ticks >= CUSTOM_TICKS_MAX;
+                    drawCurvedRect(
+                        m_stageTrack,
+                        tickButtonRect(row, which),
+                        6.f,
+                        color4(accentColor(), atLimit ? 8 : 30),
+                        color4(accentColor(), atLimit ? 40 : 95),
+                        1.f
+                    );
+                    if (glyph) {
+                        glyph->setOpacity(atLimit ? 90 : 255);
+                    }
+                }
+            }
+
+            // + custom / remove
+            bool canAddCustom = stageTotalCount() - STAGE_TABLE_SIZE < CUSTOM_STAGE_LIMIT;
+            drawCurvedRect(
+                m_stageTrack,
+                customAddRect(),
+                6.f,
+                color4(accentColor(), canAddCustom ? 30 : 8),
+                color4(accentColor(), canAddCustom ? 95 : 40),
+                1.f
+            );
+            if (m_customAddLabel) {
+                m_customAddLabel->setOpacity(canAddCustom ? 255 : 90);
+                m_customAddLabel->setVisible(showStageTab);
+            }
+            if (isCustomSelected) {
+                drawCurvedRect(
+                    m_stageTrack,
+                    customRemoveRect(),
+                    6.f,
+                    color4(warningColor(), 26),
+                    color4(warningColor(), 95),
+                    1.f
+                );
+            }
+            if (m_customRemoveLabel) {
+                m_customRemoveLabel->setVisible(showStageTab && isCustomSelected);
+            }
+
+            if (m_stageTimingLabels[2]) {
+                bool const overSafeTicks = isCustomSelected
+                    && (customStage->ticksAll > CUSTOM_TICKS_SAFE || customStage->ticksWave > CUSTOM_TICKS_SAFE);
+                m_stageTimingLabels[2]->setColor(overSafeTicks ? warningColor() : faintTextColor());
+                if (!state.isEnabled) {
+                    m_stageTimingLabels[2]->setString("raw input, nothing is buffered");
+                }
+                else if (overSafeTicks) {
+                    m_stageTimingLabels[2]->setString(fmt::format("warning: over {} ticks may lag or work worse than {}", CUSTOM_TICKS_SAFE, CUSTOM_TICKS_SAFE).c_str());
+                }
+                else if (isCustomSelected) {
+                    m_stageTimingLabels[2]->setString(fmt::format("tune each delay with -5 / -1 / +1 / +5, up to {} ticks", CUSTOM_TICKS_MAX).c_str());
+                }
+                else if (canAddCustom) {
+                    m_stageTimingLabels[2]->setString("tap + custom to make an editable copy of this stage");
+                }
+                else {
+                    m_stageTimingLabels[2]->setString("custom stage limit reached");
+                }
+            }
         }
 
         if (m_stageTimingLabels[0]) {
-            m_stageTimingLabels[0]->setString(fmt::format("all modes  {}t", state.ticksAllModes).c_str());
             m_stageTimingLabels[0]->setColor(state.isEnabled ? softTextColor() : warningColor());
         }
         if (m_stageTimingLabels[1]) {
-            m_stageTimingLabels[1]->setString(fmt::format("wave  {}t", state.ticksWaveMode).c_str());
             m_stageTimingLabels[1]->setColor(state.isEnabled ? softTextColor() : warningColor());
         }
 
@@ -3538,7 +4180,7 @@ finally {
                 drawCurvedRect(
                     m_logHighlight,
                     CCRect(LOG_X + 8.f, latestY - 10.f, LOG_WIDTH - 16.f, 20.f),
-                    6.f,
+                    4.f,
                     color4(accentColor(), 16),
                     color4(0, 0, 0, 0),
                     0.f
@@ -3650,6 +4292,7 @@ finally {
         layout();
         refresh();
         schedule(schedule_selector(AfterflowOverlay::tickRefresh), 0.2f);
+        schedule(schedule_selector(AfterflowOverlay::animTick));
 
         m_scrim->stopAllActions();
         m_scrim->setVisible(true);
@@ -3658,16 +4301,22 @@ finally {
 
         m_deck->stopAllActions();
         m_deck->setVisible(true);
-        m_deck->setScale(m_deckScale * 0.96f);
-        m_deck->runAction(CCEaseOut::create(CCScaleTo::create(0.22f, m_deckScale), 2.f));
+        m_deck->setScale(m_deckScale * 0.88f);
+        m_deck->runAction(CCEaseBackOut::create(CCScaleTo::create(0.3f, m_deckScale)));
+
+        if (m_tutorialStep < 0 && !Mod::get()->getSavedValue<bool>(TUTORIAL_DONE_KEY, false)) {
+            startTutorial();
+        }
     }
 
     void AfterflowOverlay::closePanel() {
         if (!m_isOpen) {
             return;
         }
+        endTickEdit();
         m_isOpen = false;
         unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
+        unschedule(schedule_selector(AfterflowOverlay::animTick));
 
         m_deck->stopAllActions();
         m_deck->runAction(CCSequence::create(
@@ -3695,7 +4344,7 @@ finally {
 
         if (isMobileHost()) {
             if (m_launcher) {
-                m_launcher->setVisible(true);
+                m_launcher->setVisible(showFloatingLauncher());
                 m_launcher->setScale(1.f);
             }
         }
@@ -3732,7 +4381,7 @@ finally {
             m_scrim->setVisible(false);
         }
         if (m_launcher) {
-            m_launcher->setVisible(isMobileHost() && !m_isOpen);
+            m_launcher->setVisible(showFloatingLauncher() && !m_isOpen);
         }
     }
 
@@ -3743,6 +4392,7 @@ finally {
         m_pressedTarget = HitTarget::None;
         m_pressedNode = nullptr;
         unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
+        unschedule(schedule_selector(AfterflowOverlay::animTick));
         CCLayer::onExit();
     }
 
@@ -3756,7 +4406,14 @@ finally {
         }
         if (m_isOpen) {
             CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            if (m_tutorialStep >= 0) {
+                // while the tour is up only its own buttons react
+                m_pressedTarget = tutorialHit(deckPoint);
+                m_pressedStageSlot = -1;
+                return true;
+            }
             if (!CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT).containsPoint(deckPoint)) {
+                endTickEdit();
                 m_pressedTarget = HitTarget::Outside;
                 m_pressedStageSlot = -1;
                 return true;
@@ -3764,6 +4421,20 @@ finally {
             int stageSlot = -1;
             m_pressedTarget = hitTest(deckPoint, &stageSlot);
             m_pressedStageSlot = stageSlot;
+            if (m_editingRow >= 0 && !(m_pressedTarget == HitTarget::TickField && stageSlot == m_editingRow)) {
+                endTickEdit();
+            }
+            if (m_pressedTarget == HitTarget::TickSlider) {
+                m_draggingSlider = true;
+                m_sliderRow = stageSlot;
+                m_sliderStartedOver = false;
+                if (auto* sliderStage = customStageFor(state.stageIndex)) {
+                    int startTicks = stageSlot == 0 ? sliderStage->ticksAll : sliderStage->ticksWave;
+                    m_sliderStartedOver = startTicks > CUSTOM_TICKS_SAFE;
+                }
+                setSliderFromX(deckPoint.x);
+                return true;
+            }
             if (m_pressedTarget != HitTarget::None) {
                 pressTarget(m_pressedTarget);
             }
@@ -3803,6 +4474,17 @@ finally {
             return;
         }
 
+        if (m_tutorialStep >= 0) {
+            return;
+        }
+
+        if (m_draggingSlider) {
+            if (m_isOpen) {
+                setSliderFromX(m_deck->convertToNodeSpace(touch->getLocation()).x);
+            }
+            return;
+        }
+
         if (m_isOpen && m_pressedTarget != HitTarget::None) {
             CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
             int stageSlot = -1;
@@ -3832,9 +4514,43 @@ finally {
             return;
         }
 
+        if (m_draggingSlider) {
+            int releasedRow = m_sliderRow;
+            m_draggingSlider = false;
+            m_sliderRow = -1;
+            m_pressedTarget = HitTarget::None;
+            saveCustomStages();
+            if (releasedRow >= 0 && releasedRow <= 1 && !m_sliderStartedOver) {
+                if (auto* sliderStage = customStageFor(state.stageIndex)) {
+                    int endTicks = releasedRow == 0 ? sliderStage->ticksAll : sliderStage->ticksWave;
+                    if (endTicks > CUSTOM_TICKS_SAFE) {
+                        showHighTicksPopup();
+                    }
+                }
+            }
+            return;
+        }
+
         if (!m_isOpen) {
             restorePressed();
             m_pressedTarget = HitTarget::None;
+            return;
+        }
+
+        if (m_tutorialStep >= 0) {
+            HitTarget pressed = m_pressedTarget;
+            m_pressedTarget = HitTarget::None;
+            if (pressed == HitTarget::TutorialSkip || pressed == HitTarget::TutorialNext) {
+                CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+                if (tutorialHit(deckPoint) == pressed) {
+                    if (pressed == HitTarget::TutorialSkip) {
+                        finishTutorial();
+                    }
+                    else {
+                        advanceTutorial();
+                    }
+                }
+            }
             return;
         }
 
@@ -3860,6 +4576,11 @@ finally {
     }
 
     void AfterflowOverlay::ccTouchCancelled(CCTouch*, CCEvent*) {
+        if (m_draggingSlider) {
+            m_draggingSlider = false;
+            m_sliderRow = -1;
+            saveCustomStages();
+        }
         if (m_isDraggingLauncher) {
             m_isDraggingLauncher = false;
             if (m_launcher) {
@@ -3873,12 +4594,555 @@ finally {
         m_pressedTarget = HitTarget::None;
     }
 
+    AfterflowOverlay::HitTarget AfterflowOverlay::tutorialHit(CCPoint const& point) const {
+        if (m_tutorialStep < 0 || !m_tutCard) {
+            return HitTarget::None;
+        }
+        CCPoint origin = m_tutCard->getPosition();
+        bool const isLast = m_tutorialStep >= m_tutTotal - 1;
+        if (!isLast && tutorialSkipRect(origin).containsPoint(point)) {
+            return HitTarget::TutorialSkip;
+        }
+        if (tutorialNextRect(origin).containsPoint(point)) {
+            return HitTarget::TutorialNext;
+        }
+        return HitTarget::None;
+    }
+
+    void AfterflowOverlay::clearTutorialLayer() {
+        if (m_tutorialLayer) {
+            m_tutorialLayer->removeFromParentAndCleanup(true);
+        }
+        m_tutorialLayer = nullptr;
+        m_tutShade = nullptr;
+        m_tutFx = nullptr;
+        m_tutCursor = nullptr;
+        m_tutProgress = nullptr;
+        m_tutCard = nullptr;
+        m_tutClosing = false;
+    }
+
+    void AfterflowOverlay::startTutorial() {
+        endTickEdit();
+        m_draggingSlider = false;
+        clearTutorialLayer();
+        m_tutorialStep = 0;
+        showTutorialStep();
+    }
+
+    void AfterflowOverlay::showTutorialStep() {
+        auto steps = tutorialSteps();
+        if (m_tutorialStep < 0 || m_tutorialStep >= static_cast<int>(steps.size())) {
+            return;
+        }
+        auto const& step = steps[m_tutorialStep];
+        int tab = step.tab;
+        if (tab >= 0 && tab < TAB_COUNT && tab != m_activeTab) {
+            m_activeTab = tab;
+            applyTab();
+            refresh();
+        }
+        buildTutorialLayer();
+        beginTutorialMotion(step);
+    }
+
+    void AfterflowOverlay::advanceTutorial() {
+        // if next is pressed before the cursor tapped a tab, still switch to it
+        if (m_tutTapNow && !m_tutActionDone) {
+            int pendingTab = m_tutKindNow - TF_TAB0;
+            if (pendingTab >= 0 && pendingTab < TAB_COUNT && pendingTab != m_activeTab) {
+                m_activeTab = pendingTab;
+                applyTab();
+                refresh();
+            }
+        }
+        ++m_tutorialStep;
+        if (m_tutorialStep >= static_cast<int>(tutorialSteps().size())) {
+            finishTutorial();
+            return;
+        }
+        showTutorialStep();
+    }
+
+    void AfterflowOverlay::finishTutorial() {
+        m_tutorialStep = -1;
+        Mod::get()->setSavedValue<bool>(TUTORIAL_DONE_KEY, true);
+        (void)Mod::get()->saveData();
+        if (m_tutorialLayer) {
+            // let it glide away instead of vanishing
+            m_tutClosing = true;
+            m_tutKindNow = -1;
+            m_tutKind2 = -1;
+            m_tutCardTarget = CCPoint(m_tutCardTarget.x, -m_tutCardH - 40.f);
+            m_tutSpotTarget = CCRect(-40.f, -40.f, DECK_WIDTH + 80.f, DECK_HEIGHT + 80.f);
+        }
+    }
+
+    void AfterflowOverlay::buildTutorialLayer() {
+        auto steps = tutorialSteps();
+        if (!m_deck || m_tutorialStep < 0 || m_tutorialStep >= static_cast<int>(steps.size())) {
+            return;
+        }
+        auto const& step = steps[m_tutorialStep];
+        bool const isFirst = m_tutorialStep == 0;
+        bool const isLast = m_tutorialStep == static_cast<int>(steps.size()) - 1;
+        m_tutTotal = static_cast<int>(steps.size());
+        float const cardHeight = tutorialCardHeight(step.lines.size());
+        m_tutCardH = cardHeight;
+        ccColor4F const clear = color4(0, 0, 0, 0);
+
+        if (!m_tutorialLayer) {
+            m_tutorialLayer = CCNode::create();
+            m_tutorialLayer->setContentSize(CCSize(DECK_WIDTH, DECK_HEIGHT));
+            m_deck->addChild(m_tutorialLayer, 30);
+
+            m_tutShade = makeDrawNode();
+            m_tutorialLayer->addChild(m_tutShade, 0);
+
+            m_tutCard = CCNode::create();
+            m_tutorialLayer->addChild(m_tutCard, 3);
+            m_tutCard->setPosition(CCPoint((DECK_WIDTH - TUTORIAL_CARD_W) * 0.5f, -cardHeight - 30.f));
+
+            m_tutFx = makeDrawNode();
+            m_tutorialLayer->addChild(m_tutFx, 4);
+
+            // pointer, tip at the node origin
+            m_tutCursor = makeDrawNode();
+            ccColor4F shadow = color4(0, 0, 0, 90);
+            CCPoint headShadow[3] = { CCPoint(2.f, -2.f), CCPoint(2.f, -21.f), CCPoint(15.f, -15.f) };
+            m_tutCursor->drawPolygon(headShadow, 3, shadow, 0.f, clear);
+            CCPoint head[3] = { CCPoint(0.f, 0.f), CCPoint(0.f, -19.f), CCPoint(13.f, -13.f) };
+            m_tutCursor->drawPolygon(head, 3, color4(250, 251, 255, 255), 0.f, clear);
+            CCPoint tail[4] = { CCPoint(3.5f, -13.5f), CCPoint(7.5f, -21.5f), CCPoint(11.f, -20.f), CCPoint(8.f, -12.5f) };
+            m_tutCursor->drawPolygon(tail, 4, color4(250, 251, 255, 255), 0.f, clear);
+            ccColor4F edge = color4(14, 15, 22, 255);
+            m_tutCursor->drawSegment(CCPoint(0.f, 0.f), CCPoint(0.f, -19.f), 0.7f, edge);
+            m_tutCursor->drawSegment(CCPoint(0.f, -19.f), CCPoint(4.f, -14.6f), 0.7f, edge);
+            m_tutCursor->drawSegment(CCPoint(4.f, -14.6f), CCPoint(7.5f, -21.5f), 0.7f, edge);
+            m_tutCursor->drawSegment(CCPoint(7.5f, -21.5f), CCPoint(11.f, -20.f), 0.7f, edge);
+            m_tutCursor->drawSegment(CCPoint(11.f, -20.f), CCPoint(8.f, -12.8f), 0.7f, edge);
+            m_tutCursor->drawSegment(CCPoint(8.f, -12.8f), CCPoint(13.f, -13.f), 0.7f, edge);
+            m_tutCursor->drawSegment(CCPoint(13.f, -13.f), CCPoint(0.f, 0.f), 0.7f, edge);
+            m_tutCursor->setScale(0.f);
+            m_tutCursor->setVisible(false);
+            m_tutorialLayer->addChild(m_tutCursor, 5);
+
+            m_tutAlpha = 0.f;
+            m_tutClosing = false;
+            m_tutTime = 0.f;
+            m_tutSpot = CCRect(-40.f, -40.f, DECK_WIDTH + 80.f, DECK_HEIGHT + 80.f);
+            m_tutSpotTarget = m_tutSpot;
+            m_tutCursorPos = CCPoint(DECK_WIDTH * 0.5f, 140.f);
+            m_tutCursor->setPosition(m_tutCursorPos);
+            m_tutCursorVis = 0.f;
+            m_tutProgShown = 0.f;
+            m_tutRippleT = -1.f;
+            m_tutKindNow = -1;
+            m_tutKind2 = -1;
+        }
+
+        // fresh card contents for this step
+        m_tutProgress = nullptr;
+        m_tutCard->removeAllChildrenWithCleanup(true);
+        m_tutCard->setContentSize(CCSize(TUTORIAL_CARD_W, cardHeight));
+
+        auto* glow = makeDrawNode();
+        drawCurvedRect(glow, CCRect(-4.f, -4.f, TUTORIAL_CARD_W + 8.f, cardHeight + 8.f), 15.f, clear, color4(accentColor(), 34), 2.f);
+        m_tutCard->addChild(glow, 0);
+        auto* bg = makeDrawNode();
+        drawCurvedRect(bg, CCRect(0.f, 0.f, TUTORIAL_CARD_W, cardHeight), 12.f, color4(18, 18, 24, 250), color4(accentColor(), 150), 1.5f);
+        m_tutCard->addChild(bg, 1);
+
+        m_tutProgress = makeDrawNode();
+        m_tutCard->addChild(m_tutProgress, 2);
+
+        auto popIn = [](CCNode* node, float delay, float dx, float dy) {
+            node->runAction(CCSequence::create(
+                CCDelayTime::create(delay),
+                CCSpawn::create(
+                    CCFadeIn::create(0.24f),
+                    CCEaseOut::create(CCMoveBy::create(0.24f, CCPoint(dx, dy)), 2.f),
+                    nullptr
+                ),
+                nullptr
+            ));
+        };
+
+        if (auto* title = makeLabel(step.title, true, 0.82f, color3(242, 243, 248))) {
+            title->setAnchorPoint(CCPoint(0.f, 0.5f));
+            title->setPosition(CCPoint(26.f - 14.f, cardHeight - 50.f));
+            fitLabelToWidth(title, TUTORIAL_CARD_W - 130.f);
+            title->setOpacity(0);
+            m_tutCard->addChild(title, 3);
+            popIn(title, 0.05f, 14.f, 0.f);
+        }
+        if (auto* counter = makeLabel(fmt::format("{}/{}", m_tutorialStep + 1, steps.size()), false, 0.58f, faintTextColor())) {
+            counter->setAnchorPoint(CCPoint(1.f, 0.5f));
+            counter->setPosition(CCPoint(TUTORIAL_CARD_W - 24.f, cardHeight - 22.f));
+            m_tutCard->addChild(counter, 3);
+        }
+        float lineY = cardHeight - 76.f;
+        float delay = 0.12f;
+        for (auto const& line : step.lines) {
+            if (auto* label = makeLabel(line, false, 0.6f, softTextColor())) {
+                label->setAnchorPoint(CCPoint(0.f, 0.5f));
+                label->setPosition(CCPoint(26.f, lineY - 8.f));
+                fitLabelToWidth(label, TUTORIAL_CARD_W - 52.f);
+                label->setOpacity(0);
+                m_tutCard->addChild(label, 3);
+                popIn(label, delay, 0.f, 8.f);
+            }
+            lineY -= 22.f;
+            delay += 0.06f;
+        }
+
+        CCPoint const zero(0.f, 0.f);
+        if (!isLast) {
+            makeDeckButton(m_tutCard, tutorialSkipRect(zero), "skip", false, false, 0.62f);
+        }
+        makeDeckButton(m_tutCard, tutorialNextRect(zero), isLast ? "done" : (isFirst ? "go" : "next"), true, false, 0.62f);
+    }
+
+    void AfterflowOverlay::beginTutorialMotion(TutorialStep const& step) {
+        if (!m_tutorialLayer) {
+            return;
+        }
+        m_tutKindNow = step.cursor;
+        m_tutTapNow = step.tap;
+        m_tutFocusNow = step.focus;
+        m_tutKind2 = step.cursor2;
+        m_tutPhase = 0;
+        m_tutPhaseTime = 0.f;
+        m_tutActionDone = false;
+
+        std::vector<CCRect> avoid;
+        for (int kind : { step.cursor, step.focus, step.cursor2 }) {
+            if (kind >= 0) {
+                avoid.push_back(tutorialRectFor(kind));
+            }
+        }
+        m_tutCardTarget = tutorialPickCardOrigin(m_tutCardH, avoid, step.cursor < 0);
+
+        if (step.cursor >= 0) {
+            m_tutSpotTarget = tutorialRectFor(step.cursor);
+        }
+        else {
+            m_tutSpotTarget = tutorialRectFor(step.focus);
+            m_tutPhase = 2;
+        }
+    }
+
+    void AfterflowOverlay::tutorialFrame(float dt) {
+        if (!m_tutorialLayer || !m_tutShade || !m_tutCard || !m_tutCursor || !m_tutFx) {
+            return;
+        }
+        dt = std::min(dt, 0.05f);
+        m_tutTime += dt;
+        auto ease = [dt](float current, float target, float rate) {
+            return current + (target - current) * (1.f - std::exp(-rate * dt));
+        };
+
+        if (m_tutClosing) {
+            m_tutAlpha -= dt * 3.2f;
+            if (m_tutAlpha <= 0.f) {
+                clearTutorialLayer();
+                return;
+            }
+        }
+        else if (m_tutAlpha < 1.f) {
+            m_tutAlpha = std::min(1.f, m_tutAlpha + dt * 4.f);
+        }
+
+        // ---- cursor and step script ----
+        float pressScale = 1.f;
+        if (m_tutKindNow >= 0) {
+            CCRect targetRect = tutorialRectFor(m_tutKindNow);
+            CCPoint goal(targetRect.getMidX(), targetRect.getMidY());
+            if (m_tutPhase == 0) {
+                float dx = goal.x - m_tutCursorPos.x;
+                float dy = goal.y - m_tutCursorPos.y;
+                float dist = std::sqrt(dx * dx + dy * dy);
+                if (dist < 2.5f) {
+                    m_tutCursorPos = goal;
+                    m_tutPhaseTime = 0.f;
+                    if (m_tutTapNow) {
+                        m_tutPhase = 1;
+                        m_tutActionDone = false;
+                    }
+                    else {
+                        m_tutPhase = 2;
+                        m_tutSpotTarget = tutorialRectFor(m_tutFocusNow);
+                    }
+                }
+                else {
+                    float stepLen = std::max(dist * (1.f - std::exp(-6.5f * dt)), 160.f * dt);
+                    stepLen = std::min(stepLen, dist);
+                    m_tutCursorPos.x += dx / dist * stepLen;
+                    m_tutCursorPos.y += dy / dist * stepLen;
+                }
+            }
+            else if (m_tutPhase == 1) {
+                m_tutPhaseTime += dt;
+                float t = std::clamp(m_tutPhaseTime / 0.3f, 0.f, 1.f);
+                pressScale = 1.f - 0.2f * std::sin(3.14159265f * t);
+                if (!m_tutActionDone && m_tutPhaseTime >= 0.13f) {
+                    m_tutActionDone = true;
+                    m_tutRippleT = 0.f;
+                    int tab = m_tutKindNow - TF_TAB0;
+                    if (tab >= 0 && tab < TAB_COUNT && tab != m_activeTab) {
+                        m_activeTab = tab;
+                        applyTab();
+                        refresh();
+                    }
+                    m_tutSpotTarget = tutorialRectFor(m_tutFocusNow);
+                }
+                if (m_tutPhaseTime >= 0.34f) {
+                    m_tutPhase = 2;
+                    m_tutPhaseTime = 0.f;
+                }
+            }
+            else {
+                m_tutPhaseTime += dt;
+                if (m_tutKind2 >= 0 && m_tutPhaseTime >= 1.6f) {
+                    m_tutKindNow = m_tutKind2;
+                    m_tutKind2 = -1;
+                    m_tutTapNow = false;
+                    m_tutFocusNow = m_tutKindNow;
+                    m_tutSpotTarget = tutorialRectFor(m_tutKindNow);
+                    m_tutPhase = 0;
+                }
+            }
+        }
+        m_tutCursorVis = ease(m_tutCursorVis, m_tutKindNow >= 0 ? 1.f : 0.f, 10.f);
+        float bob = (m_tutPhase == 2 && m_tutKindNow >= 0) ? std::sin(m_tutTime * 3.f) * 1.6f : 0.f;
+        m_tutCursor->setPosition(CCPoint(m_tutCursorPos.x, m_tutCursorPos.y + bob));
+        m_tutCursor->setScale(1.3f * m_tutCursorVis * pressScale);
+        m_tutCursor->setVisible(m_tutCursorVis > 0.03f);
+
+        // ---- tap ripple ----
+        m_tutFx->clear();
+        if (m_tutRippleT >= 0.f) {
+            m_tutRippleT += dt;
+            float t = m_tutRippleT / 0.55f;
+            if (t >= 1.f) {
+                m_tutRippleT = -1.f;
+            }
+            else {
+                float fade = 1.f - t;
+                for (int ring = 0; ring < 2; ++ring) {
+                    float ringT = std::clamp(t - 0.18f * static_cast<float>(ring), 0.f, 1.f);
+                    if (ringT <= 0.f) {
+                        continue;
+                    }
+                    float radius = 5.f + 30.f * (1.f - (1.f - ringT) * (1.f - ringT));
+                    m_tutFx->drawCircle(
+                        m_tutCursorPos, radius, color4(0, 0, 0, 0), 2.f,
+                        color4(accentColor(), static_cast<int>(200.f * fade * (ring == 0 ? 1.f : 0.6f))), 32
+                    );
+                }
+            }
+        }
+
+        // ---- spotlight ----
+        m_tutSpot.origin.x = ease(m_tutSpot.origin.x, m_tutSpotTarget.origin.x, 9.f);
+        m_tutSpot.origin.y = ease(m_tutSpot.origin.y, m_tutSpotTarget.origin.y, 9.f);
+        m_tutSpot.size.width = ease(m_tutSpot.size.width, m_tutSpotTarget.size.width, 9.f);
+        m_tutSpot.size.height = ease(m_tutSpot.size.height, m_tutSpotTarget.size.height, 9.f);
+
+        m_tutShade->clear();
+        CCRect lit = padRect(m_tutSpot, 7.f);
+        float x0 = std::clamp(lit.getMinX(), 0.f, DECK_WIDTH);
+        float x1 = std::clamp(lit.getMaxX(), 0.f, DECK_WIDTH);
+        float y0 = std::clamp(lit.getMinY(), 0.f, DECK_HEIGHT);
+        float y1 = std::clamp(lit.getMaxY(), 0.f, DECK_HEIGHT);
+        ccColor4F shadeColor = color4(0, 0, 0, static_cast<int>(168.f * std::clamp(m_tutAlpha, 0.f, 1.f)));
+        ccColor4F clearColor = color4(0, 0, 0, 0);
+        auto fillBlock = [&](float ax, float ay, float bx, float by) {
+            if (bx - ax < 0.5f || by - ay < 0.5f) {
+                return;
+            }
+            CCPoint points[4] = { CCPoint(ax, ay), CCPoint(bx, ay), CCPoint(bx, by), CCPoint(ax, by) };
+            m_tutShade->drawPolygon(points, 4, shadeColor, 0.f, clearColor);
+        };
+        fillBlock(0.f, 0.f, DECK_WIDTH, y0);
+        fillBlock(0.f, y1, DECK_WIDTH, DECK_HEIGHT);
+        fillBlock(0.f, y0, x0, y1);
+        fillBlock(x1, y0, DECK_WIDTH, y1);
+
+        float pulse = 0.5f + 0.5f * std::sin(m_tutTime * 3.4f);
+        float alpha = std::clamp(m_tutAlpha, 0.f, 1.f);
+        for (int ring = 3; ring >= 1; --ring) {
+            float spread = 2.5f * static_cast<float>(ring) + 1.5f * pulse;
+            drawCurvedRect(
+                m_tutShade, padRect(lit, spread), 9.f + spread, clearColor,
+                color4(accentColor(), static_cast<int>(48.f / static_cast<float>(ring) * alpha)), 1.5f
+            );
+        }
+        drawCurvedRect(m_tutShade, lit, 9.f, clearColor, color4(accentColor(), static_cast<int>((150.f + 90.f * pulse) * alpha)), 2.f);
+
+        // ---- card slide ----
+        CCPoint cardPos = m_tutCard->getPosition();
+        m_tutCard->setPosition(CCPoint(
+            ease(cardPos.x, m_tutCardTarget.x, 10.f),
+            ease(cardPos.y, m_tutCardTarget.y, 10.f)
+        ));
+
+        // ---- progress pills ----
+        if (m_tutProgress) {
+            m_tutProgShown = ease(m_tutProgShown, static_cast<float>(std::max(m_tutorialStep, 0)), 9.f);
+            m_tutProgress->clear();
+            float x = 26.f;
+            float y = m_tutCardH - 22.f;
+            for (int index = 0; index < m_tutTotal; ++index) {
+                float nearness = std::clamp(1.f - std::abs(static_cast<float>(index) - m_tutProgShown), 0.f, 1.f);
+                float width = 10.f + 22.f * nearness;
+                bool reached = static_cast<float>(index) <= m_tutProgShown + 0.5f;
+                drawCurvedRect(
+                    m_tutProgress, CCRect(x, y - 2.5f, width, 5.f), 2.5f,
+                    reached ? color4(accentColor(), 235) : color4(255, 255, 255, 40),
+                    color4(0, 0, 0, 0), 0.f
+                );
+                x += width + 5.f;
+            }
+        }
+    }
+
+    void AfterflowOverlay::drawTabIndicator() {
+        if (!m_tabBar) {
+            return;
+        }
+        m_tabBar->clear();
+        auto slot = tabSlotRect(m_activeTab);
+        float baseWidth = slot.size.width - 36.f;
+        float travel = m_tabIndTarget - m_tabIndX;
+        // stretch toward the direction of travel so the pill looks fluid
+        float stretch = std::min(std::abs(travel) * 0.2f, 28.f);
+        float x = travel >= 0.f ? m_tabIndX : m_tabIndX - stretch;
+        drawCurvedRect(
+            m_tabBar,
+            CCRect(x, TAB_LABEL_Y - 17.f, baseWidth + stretch, 34.f),
+            8.f,
+            color4(accentColor(), 26),
+            color4(accentColor(), 74),
+            1.f
+        );
+    }
+
+    void AfterflowOverlay::animTick(float dt) {
+        if (!m_isOpen) {
+            return;
+        }
+        dt = std::min(dt, 0.05f);
+
+        if (m_tabIndX >= 0.f && std::abs(m_tabIndTarget - m_tabIndX) > 0.05f) {
+            m_tabIndX += (m_tabIndTarget - m_tabIndX) * (1.f - std::exp(-16.f * dt));
+            if (std::abs(m_tabIndTarget - m_tabIndX) < 0.3f) {
+                m_tabIndX = m_tabIndTarget;
+            }
+            drawTabIndicator();
+        }
+
+        bool barsMoving = false;
+        for (int index = 0; index < 2; ++index) {
+            if (m_barShown[index] < 0.f) {
+                continue;
+            }
+            float diff = m_barTarget[index] - m_barShown[index];
+            if (std::abs(diff) > 0.05f) {
+                m_barShown[index] += diff * (1.f - std::exp(-14.f * dt));
+                if (std::abs(m_barTarget[index] - m_barShown[index]) < 0.08f) {
+                    m_barShown[index] = m_barTarget[index];
+                }
+                barsMoving = true;
+            }
+        }
+        if (barsMoving && m_activeTab == 1 && !m_draggingSlider) {
+            refresh();
+        }
+
+        tutorialFrame(dt);
+    }
+
+    void AfterflowOverlay::beginTickEdit(int row) {
+        if (row < 0 || row > 1 || !m_tickInputs[row] || !customStageFor(state.stageIndex)) {
+            return;
+        }
+        m_editingRow = row;
+        // start empty so the digits typed replace the old value
+        m_suppressTickInput = true;
+        m_tickInputs[row]->setString("");
+        m_suppressTickInput = false;
+        m_tickInputs[row]->focus();
+    }
+
+    void AfterflowOverlay::endTickEdit() {
+        if (m_editingRow >= 0 && m_editingRow < 2 && m_tickInputs[m_editingRow]) {
+            m_tickInputs[m_editingRow]->defocus();
+        }
+        m_editingRow = -1;
+    }
+
+    void AfterflowOverlay::onTickInput(int row, std::string const& text) {
+        if (m_suppressTickInput || row < 0 || row > 1) {
+            return;
+        }
+        auto* custom = customStageFor(state.stageIndex);
+        if (!custom || text.empty()) {
+            return;
+        }
+        if (m_editingRow < 0) {
+            m_editingRow = row;
+        }
+        int raw = std::atoi(text.c_str());
+        int value = clampCustomTicks(raw);
+        if (raw > CUSTOM_TICKS_MAX && m_tickInputs[row]) {
+            m_suppressTickInput = true;
+            m_tickInputs[row]->setString(fmt::format("{}", value));
+            m_suppressTickInput = false;
+        }
+        int& ticks = row == 0 ? custom->ticksAll : custom->ticksWave;
+        if (ticks == value) {
+            return;
+        }
+        bool const crossedSafe = ticks <= CUSTOM_TICKS_SAFE && value > CUSTOM_TICKS_SAFE;
+        ticks = value;
+        saveCustomStages();
+        setStageIndex(state.stageIndex);
+        if (crossedSafe) {
+            endTickEdit();
+            showHighTicksPopup();
+        }
+    }
+
+    void AfterflowOverlay::setSliderFromX(float x) {
+        auto* custom = customStageFor(state.stageIndex);
+        if (!custom || m_sliderRow < 0 || m_sliderRow > 1) {
+            return;
+        }
+        float ratio = std::clamp((x - STAGE_BAR_X) / STAGE_BAR_WIDTH, 0.f, 1.f);
+        int value = clampCustomTicks(static_cast<int>(std::lround(
+            static_cast<float>(CUSTOM_TICKS_MIN) + ratio * static_cast<float>(CUSTOM_TICKS_MAX - CUSTOM_TICKS_MIN)
+        )));
+        int& ticks = m_sliderRow == 0 ? custom->ticksAll : custom->ticksWave;
+        if (ticks == value) {
+            return;
+        }
+        ticks = value;
+        setStageIndex(state.stageIndex);
+    }
+
     AfterflowOverlay::HitTarget AfterflowOverlay::hitTest(CCPoint const& point, int* stageSlot) const {
+        if (logoRect().containsPoint(point)) {
+            return HitTarget::Logo;
+        }
         for (int tabIndex = 0; tabIndex < TAB_COUNT; ++tabIndex) {
             if (tabSlotRect(tabIndex).containsPoint(point)) {
                 if (stageSlot) { *stageSlot = tabIndex; }
                 return HitTarget::Tab;
             }
+        }
+        if (m_activeTab == 2 && creditsRect().containsPoint(point)) {
+            return HitTarget::Credits;
         }
         if (m_activeTab == 2) {
             for (int index = 0; index < THEME_COUNT; ++index) {
@@ -3903,6 +5167,10 @@ finally {
                 if (stageSlot) { *stageSlot = 1; }
                 return HitTarget::ExportConfig;
             }
+            if (configButtonRect(2).containsPoint(point)) {
+                if (stageSlot) { *stageSlot = 2; }
+                return HitTarget::ReplayTutorial;
+            }
         }
         if (CCRect(DISMISS_X, DISMISS_Y, DISMISS_WIDTH, DISMISS_HEIGHT).containsPoint(point)) {
             return HitTarget::Dismiss;
@@ -3920,25 +5188,37 @@ finally {
                 }
             }
         }
-        if (m_activeTab == 2) {
-            int slotCount = static_cast<int>(m_modeSlots.size());
-            for (int index = 0; index <= slotCount; ++index) {
-                CCRect tile(
-                    MODE_ICON_X + MODE_ICON_STEP * static_cast<float>(index) + 3.f,
-                    MODE_ICON_Y - (MODE_ICON_SIZE + 8.f) * 0.5f,
-                    MODE_ICON_STEP - 6.f,
-                    MODE_ICON_SIZE + 8.f
-                );
-                if (tile.containsPoint(point)) {
-                    if (stageSlot) { *stageSlot = index; }
-                    return (index == slotCount) ? HitTarget::ModeIconAdd : HitTarget::ModeIcon;
-                }
-            }
+        if (m_activeTab == 2 && creditsRect().containsPoint(point)) {
+            return HitTarget::Credits;
         }
         if (m_activeTab == 1) {
-            CCRect addStageRect(CONTENT_RIGHT - 78.f, STAGE_NAME_Y - 10.f, 20.f, 20.f);
-            if (addStageRect.containsPoint(point)) {
+            if (customAddRect().containsPoint(point)) {
                 return HitTarget::StageAdd;
+            }
+            if (customStageFor(state.stageIndex)) {
+                if (customRemoveRect().containsPoint(point)) {
+                    return HitTarget::CustomRemove;
+                }
+                for (int row = 0; row < 2; ++row) {
+                    if (tickValueRect(row).containsPoint(point)) {
+                        if (stageSlot) { *stageSlot = row; }
+                        return HitTarget::TickField;
+                    }
+                }
+                for (int row = 0; row < 2; ++row) {
+                    if (tickSliderRect(row).containsPoint(point)) {
+                        if (stageSlot) { *stageSlot = row; }
+                        return HitTarget::TickSlider;
+                    }
+                }
+                for (int row = 0; row < 2; ++row) {
+                    for (int which = 0; which < 4; ++which) {
+                        if (tickButtonRect(row, which).containsPoint(point)) {
+                            if (stageSlot) { *stageSlot = row * 4 + which; }
+                            return HitTarget::TickAdjust;
+                        }
+                    }
+                }
             }
         }
         return HitTarget::None;
@@ -3951,6 +5231,10 @@ finally {
             case HitTarget::StageForward: return m_stageForwardButton;
             case HitTarget::CopyLog: return m_copyButton;
             case HitTarget::Terminal: return m_terminalButton;
+            case HitTarget::ImportConfig: return m_importButton;
+            case HitTarget::ExportConfig: return m_exportButton;
+            case HitTarget::ReplayTutorial: return m_tutorialButton;
+            case HitTarget::Credits: return m_creditsButton;
             default: return nullptr;
         }
     }
@@ -3998,6 +5282,22 @@ finally {
             return;
         }
 
+        if (target == HitTarget::ReplayTutorial) {
+            startTutorial();
+            return;
+        }
+
+        if (target == HitTarget::Credits) {
+            FLAlertLayer::create(
+                "Credits",
+                "<cy>sevend</c> - creator of afterflow + original ui\n"
+                "<cy>Sir Abraham Creakstopher the second</c> - baller.w21 made mobile support and a ton of stuff\n"
+                "<cy>Legion</c> - nyxx6_1 gave a ton of ideas",
+                "thank you"
+            )->show();
+            return;
+        }
+
         if (target == HitTarget::SettingsRow) {
             if (m_pressedStageSlot == 0) {
                 Mod::get()->setSettingValue<bool>("ui-glow", !getUIGlow());
@@ -4012,31 +5312,56 @@ finally {
         switch (target) {
             case HitTarget::StageAdd: {
                 loadCustomStages();
-                if (stageTotalCount() < STAGE_MAX_STAGES) {
-                    g_customStages.push_back("custom " + std::to_string(static_cast<int>(g_customStages.size()) + 1));
+                if (static_cast<int>(g_customStages.size()) < CUSTOM_STAGE_LIMIT) {
+                    int copyAll = state.isEnabled ? state.ticksAllModes : 8;
+                    int copyWave = state.isEnabled ? state.ticksWaveMode : 8;
+                    g_customStages.push_back({ clampCustomTicks(copyAll), clampCustomTicks(copyWave) });
                     saveCustomStages();
                     rebuildDeck();
+                    setStageIndex(STAGE_TABLE_SIZE + static_cast<int>(g_customStages.size()) - 1);
                 }
                 break;
             }
-            case HitTarget::ModeIcon: {
-                auto& slots = modeSlots();
-                int index = m_pressedStageSlot;
-                if (index >= 0 && index < static_cast<int>(slots.size())) {
-                    slots[index] = (slots[index] + 1) % 8;
-                    saveModeSlots();
-                    updateModeIcons();
-                    refresh();
+            case HitTarget::CustomRemove: {
+                loadCustomStages();
+                int custom = state.stageIndex - STAGE_TABLE_SIZE;
+                if (custom >= 0 && custom < static_cast<int>(g_customStages.size())) {
+                    g_customStages.erase(g_customStages.begin() + custom);
+                    saveCustomStages();
+                    int nextIndex = custom > 0 ? STAGE_TABLE_SIZE + custom - 1 : STAGE_TABLE_SIZE - 2;
+                    rebuildDeck();
+                    setStageIndex(nextIndex);
                 }
                 break;
             }
-            case HitTarget::ModeIconAdd: {
-                auto& slots = modeSlots();
-                if (slots.size() < 16) {
-                    slots.push_back(0);
-                    saveModeSlots();
-                    updateModeIcons();
-                    refresh();
+            case HitTarget::Logo:
+                startTutorial();
+                break;
+            case HitTarget::TutorialSkip:
+            case HitTarget::TutorialNext:
+                break;
+            case HitTarget::TickField: {
+                beginTickEdit(m_pressedStageSlot);
+                break;
+            }
+            case HitTarget::TickSlider:
+                break;
+            case HitTarget::TickAdjust: {
+                if (auto* custom = customStageFor(state.stageIndex)) {
+                    static int const deltas[4] = { -5, -1, 1, 5 };
+                    int row = m_pressedStageSlot / 4;
+                    int which = m_pressedStageSlot % 4;
+                    if (row >= 0 && row < 2 && which >= 0 && which < 4) {
+                        int& ticks = row == 0 ? custom->ticksAll : custom->ticksWave;
+                        int const before = ticks;
+                        ticks = clampCustomTicks(ticks + deltas[which]);
+                        saveCustomStages();
+                        setStageIndex(state.stageIndex);
+                        refresh();
+                        if (before <= CUSTOM_TICKS_SAFE && ticks > CUSTOM_TICKS_SAFE) {
+                            showHighTicksPopup();
+                        }
+                    }
                 }
                 break;
             }
@@ -4209,7 +5534,7 @@ finally {
                         MODE_ICON_STEP - 6.f,
                         MODE_ICON_SIZE + 8.f
                     ),
-                    8.f,
+                    5.f,
                     color4(255, 255, 255, isAdd ? 6 : 12),
                     color4(0, 0, 0, 0),
                     0.f
@@ -5545,7 +6870,12 @@ finally {
         }
 
         bool hasFlyer = isFlying(player1) || (player2 && isFlying(player2));
-        int horizonTicks = st(hasFlyer ? 48 : std::clamp(state.groundHorizonTicks, 48, 240));
+        int groundHorizon = std::clamp(state.groundHorizonTicks, 48, 240);
+        if (!hasFlyer && state.ticksAllModes + 48 > groundHorizon) {
+            // a long custom delay needs a lookahead that reaches past it
+            groundHorizon = std::min(state.ticksAllModes + 48, 288);
+        }
+        int horizonTicks = st(hasFlyer ? 48 : groundHorizon);
         if (hasWave) {
             horizonTicks = fullWaveHorizon(isMini);
         }
@@ -5905,6 +7235,103 @@ class $modify(BufPlayLayer, PlayLayer) {
             return;
         }
         PlayLayer::playEndAnimationToPos(targetPosition);
+    }
+};
+
+namespace {
+    CCMenuItemSpriteExtra* findPauseSettingsButton(CCNode* root) {
+        if (auto* byId = typeinfo_cast<CCMenuItemSpriteExtra*>(root->getChildByIDRecursive("options-button"))) {
+            return byId;
+        }
+        auto* gearFrame = CCSpriteFrameCache::get()->spriteFrameByName("GJ_optionsBtn02_001.png");
+        if (!gearFrame) {
+            return nullptr;
+        }
+        std::function<CCMenuItemSpriteExtra*(CCNode*)> search = [&](CCNode* node) -> CCMenuItemSpriteExtra* {
+            auto* children = node->getChildren();
+            if (!children) {
+                return nullptr;
+            }
+            for (auto* child : CCArrayExt<CCNode*>(children)) {
+                if (auto* item = typeinfo_cast<CCMenuItemSpriteExtra*>(child)) {
+                    if (auto* sprite = typeinfo_cast<CCSprite*>(item->getNormalImage())) {
+                        if (sprite->isFrameDisplayed(gearFrame)) {
+                            return item;
+                        }
+                    }
+                }
+                if (auto* found = search(child)) {
+                    return found;
+                }
+            }
+            return nullptr;
+        };
+        return search(root);
+    }
+}
+
+class $modify(BufPauseLayer, PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+        if (!isMobileHost()) {
+            return;
+        }
+
+        auto* settingsButton = findPauseSettingsButton(this);
+        if (!settingsButton || !settingsButton->getParent()) {
+            log::warn("afterflow: could not find the settings button in the pause menu");
+            return;
+        }
+
+        // on-screen size of the settings button (include every parent's scale up to the pause layer)
+        float scaleX = 1.f;
+        float scaleY = 1.f;
+        for (CCNode* node = settingsButton; node && node != this; node = node->getParent()) {
+            scaleX *= node->getScaleX();
+            scaleY *= node->getScaleY();
+        }
+        auto settingsContent = settingsButton->getContentSize();
+        float width = settingsContent.width * scaleX;
+        float height = settingsContent.height * scaleY;
+        if (width <= 1.f || height <= 1.f) {
+            return;
+        }
+
+        auto* face = CCNode::create();
+        face->setContentSize(CCSize(width, height));
+        face->setAnchorPoint(CCPoint(0.5f, 0.5f));
+        float diameter = std::min(width, height);
+        auto* disc = makeDrawNode();
+        disc->drawCircle(CCPoint(width / 2.f, height / 2.f), diameter / 2.f - 1.f, color4(22, 22, 26, 235), 1.5f, color4(accentColor(), 255), 48);
+        face->addChild(disc);
+        if (auto* logo = makeLogoMark(diameter * 0.72f)) {
+            logo->setPosition(CCPoint(width / 2.f, height / 2.f));
+            face->addChild(logo, 1);
+        }
+
+        auto* button = CCMenuItemSpriteExtra::create(face, this, menu_selector(BufPauseLayer::onAfterflowButton));
+        button->setID("afterflow-button"_spr);
+
+        // place it directly under the settings button
+        CCPoint worldPosition = settingsButton->getParent()->convertToWorldSpace(settingsButton->getPosition());
+        CCPoint localPosition = this->convertToNodeSpace(worldPosition);
+        float gap = 6.f;
+        CCPoint target(localPosition.x, localPosition.y - height - gap);
+        if (target.y - height / 2.f < 4.f) {
+            // no room below, put it to the left instead
+            target = CCPoint(localPosition.x - width - gap, localPosition.y);
+        }
+
+        auto* menu = CCMenu::create();
+        menu->setID("afterflow-menu"_spr);
+        menu->setPosition(CCPoint(0.f, 0.f));
+        button->setPosition(target);
+        menu->addChild(button);
+        this->addChild(menu, 100);
+    }
+
+    void onAfterflowButton(CCObject*) {
+        toggleAfterflowPanel();
     }
 };
 
