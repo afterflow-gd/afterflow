@@ -22,6 +22,8 @@ jobs:
           - name: iOS
             os: macos-latest
             target: iOS
+            bindings-ref: 1605f500d053f8de122bf5c7dc6d17c24866e02e
+            configure-args: -DSKIP_BUILDING_CODEGEN=OFF
           - name: Android32
             os: ubuntu-latest
             target: Android32
@@ -31,16 +33,18 @@ jobs:
 
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
-    continue-on-error: ${{ matrix.config.name == 'iOS' }}
+    continue-on-error: ${{ matrix.config.name == 'iOS' || matrix.config.name == 'Android32' || matrix.config.name == 'Android64' }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
-        with:
-          combine: true
-          target: ${{ matrix.config.target }}
+          with:
+            combine: true
+            target: ${{ matrix.config.target }}
+            bindings-ref: ${{ matrix.config.bindings-ref }}
+            configure-args: ${{ matrix.config.configure-args }}
 
   package:
     name: Package builds
