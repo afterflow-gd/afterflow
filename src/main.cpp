@@ -1,18 +1,22 @@
 #include <Geode/Geode.hpp>
 #include <Geode/utils/general.hpp>
 #include <Geode/utils/async.hpp>
+#include <Geode/utils/cocos.hpp>
 #include <Geode/utils/VersionInfo.hpp>
 #include <Geode/utils/web.hpp>
 #include <Geode/loader/SettingV3.hpp>
 #include <Geode/utils/Keyboard.hpp>
 #include <Geode/ui/GeodeUI.hpp>
 #include <Geode/ui/Popup.hpp>
+#include <Geode/ui/SceneEvent.hpp>
+#include <Geode/cocos/touch_dispatcher/CCTouchDispatcher.h>
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/EffectGameObject.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/HardStreak.hpp>
 #include <Geode/modify/LevelEditorLayer.hpp>
+#include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 #include <Geode/modify/RingObject.hpp>
@@ -27,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -53,6 +58,10 @@ namespace {
     constexpr char const* KEYBIND_STAGE = "keybind-stage";
     constexpr char const* KEYBIND_TERMINAL = "keybind-terminal";
     constexpr char const* KEYBIND_INTRO_DONE = "keybind-intro-done";
+
+    constexpr size_t RECENT_LOG_CAPACITY = 64;
+    std::mutex g_recentLogMutex;
+    std::deque<std::string> g_recentLog;
 
 #ifdef _WIN32
     HANDLE g_terminalLogHandle = INVALID_HANDLE_VALUE;
@@ -337,7 +346,9 @@ namespace {
     bool isMarginUsed = false;
 
     void cycleStage(int direction);
+    void setStageIndex(int stageIndex);
     void toggleTerminal();
+    void toggleAfterflowPanel();
     std::string stageText();
 
     float stepScale() {
@@ -388,10 +399,24 @@ namespace {
         Windows,
         Linux,
         Mac,
+        Android,
+        IOS,
     };
 
+    bool isMobileHost() {
+#ifdef GEODE_IS_MOBILE
+        return true;
+#else
+        return false;
+#endif
+    }
+
     HostOS hostOS() {
-#ifdef GEODE_IS_MACOS
+#if defined(GEODE_IS_ANDROID)
+        return HostOS::Android;
+#elif defined(GEODE_IS_IOS)
+        return HostOS::IOS;
+#elif defined(GEODE_IS_MACOS)
         return HostOS::Mac;
 #else
         static HostOS const hostOperatingSystem = geode::utils::platform::isWine() ? HostOS::Linux : HostOS::Windows;
@@ -403,6 +428,8 @@ namespace {
         switch (hostOS()) {
             case HostOS::Linux: return "linux";
             case HostOS::Mac: return "macos";
+            case HostOS::Android: return "android";
+            case HostOS::IOS: return "ios";
             default: return "windows";
         }
     }
@@ -411,6 +438,8 @@ namespace {
         switch (hostOS()) {
             case HostOS::Linux: return "proton/wine";
             case HostOS::Mac: return "native";
+            case HostOS::Android: return "mobile";
+            case HostOS::IOS: return "mobile";
             default: return "native";
         }
     }
@@ -478,7 +507,42 @@ namespace {
     }
 
     bool isTerminalEnabled() {
+        if (isMobileHost()) {
+            return false;
+        }
         return Mod::get()->getSettingValue<bool>("terminal-enabled");
+    }
+
+    ccColor3B getUIPrimaryColor() {
+        return Mod::get()->getSettingValue<ccColor3B>("ui-primary-color");
+    }
+
+    ccColor3B getUISecondaryColor() {
+        return Mod::get()->getSettingValue<ccColor3B>("ui-secondary-color");
+    }
+
+    ccColor3B getUISurfaceColor() {
+        return Mod::get()->getSettingValue<ccColor3B>("ui-surface-color");
+    }
+
+    ccColor3B getUITextColor() {
+        return Mod::get()->getSettingValue<ccColor3B>("ui-text-color");
+    }
+
+    bool getUIGlow() {
+        return Mod::get()->getSettingValue<bool>("ui-glow");
+    }
+
+    float getUIPanelScale() {
+        return static_cast<float>(Mod::get()->getSettingValue<double>("ui-panel-scale"));
+    }
+
+    // The deck itself is intentionally small; type is boosted so labels stay
+    // readable at that footprint instead of shrinking with the panel.
+    constexpr float FONT_SCALE_BOOST = 1.0f;
+
+    float getUIFontScale() {
+        return static_cast<float>(Mod::get()->getSettingValue<double>("ui-font-scale")) * FONT_SCALE_BOOST;
     }
 
     std::filesystem::path macTerminalCommandPath() {
@@ -1046,6 +1110,9 @@ finally {
 #endif
 
     void removeLegacyTerminalLogs() {
+        if (isMobileHost()) {
+            return;
+        }
         if (hostOS() == HostOS::Mac) {
             return;
         }
@@ -1077,6 +1144,9 @@ finally {
 #endif
 
     void resetTerminalLog() {
+        if (isMobileHost()) {
+            return;
+        }
         writeTerminalFlags();
         if (hostOS() == HostOS::Linux) {
             ensureWineRuntimeDir();
@@ -1128,7 +1198,24 @@ finally {
         writeTerminalScript();
     }
 
+    void pushRecentLog(std::string const& message) {
+        std::lock_guard<std::mutex> lock(g_recentLogMutex);
+        g_recentLog.push_back(message);
+        while (g_recentLog.size() > RECENT_LOG_CAPACITY) {
+            g_recentLog.pop_front();
+        }
+    }
+
+    std::vector<std::string> recentLogSnapshot() {
+        std::lock_guard<std::mutex> lock(g_recentLogMutex);
+        return std::vector<std::string>(g_recentLog.begin(), g_recentLog.end());
+    }
+
     void appendTerminalLog(std::string const& message) {
+        pushRecentLog(message);
+        if (isMobileHost()) {
+            return;
+        }
         if (hostOS() == HostOS::Linux || hostOS() == HostOS::Mac) {
             std::ofstream outputFile(terminalLogPath(), std::ios::app);
             if (outputFile) {
@@ -1168,12 +1255,19 @@ finally {
         return outputText;
     }
 
-    std::string stageKey() {
-        return keybindList(KEYBIND_STAGE);
+    std::string lowercaseText(std::string text) {
+        for (auto& character : text) {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        }
+        return text;
     }
 
-    std::string terminalKey() {
-        return keybindList(KEYBIND_TERMINAL);
+    std::string stageKey() {
+        return lowercaseText(keybindList(KEYBIND_STAGE));
+    }
+
+    std::string panelKey() {
+        return lowercaseText(keybindList(KEYBIND_TERMINAL));
     }
 
     void finishKeybindIntro() {
@@ -1208,15 +1302,24 @@ finally {
             return false;
         }
 
-        auto contentText = fmt::format(
-            "Afterflow uses Geode keybinds, so both controls can be changed.\n\n"
-            "{}  cycle stage\n{}  terminal\n\n"
-            "You can set these in Geode's mod settings or keybind popup.",
-            stageKey(),
-            terminalKey()
-        );
+        std::string contentText;
+        if (isMobileHost()) {
+            contentText =
+                "Tap the floating Afterflow logo to open the control deck.\n\n"
+                "Use the stage arrows or numbered segments to change stages.\n\n"
+                "Drag the Afterflow logo anywhere to move it.";
+        }
+        else {
+            contentText = fmt::format(
+                "Afterflow uses Geode keybinds, so both controls can be changed.\n\n"
+                "{}  open control deck\n{}  cycle stage\n\n"
+                "You can set these in Geode's mod settings or keybind popup.",
+                panelKey(),
+                stageKey()
+            );
+        }
         createQuickPopup(
-            "Afterflow keybinds",
+            "Afterflow controls",
             contentText,
             "Defaults are fine",
             "Open settings",
@@ -1241,7 +1344,7 @@ finally {
         });
         listenForKeybindSettingPresses(KEYBIND_TERMINAL, [](Keybind const&, bool isDown, bool isRepeat, double) {
             if (isDown && !isRepeat) {
-                toggleTerminal();
+                toggleAfterflowPanel();
             }
             return true;
         });
@@ -1251,6 +1354,10 @@ finally {
         "https://raw.githubusercontent.com/afterflow-gd/afterflow/refs/heads/main/version.txt";
     constexpr char const* RELEASE_URL_PREFIX =
         "https://github.com/afterflow-gd/afterflow/releases/tag/";
+    // always resolves to the newest published package, so the auto-updater
+    // does not have to guess the release tag naming scheme
+    constexpr char const* UPDATE_ASSET_URL =
+        "https://github.com/afterflow-gd/afterflow/releases/latest/download/afterflow.prsevend.geode";
 
     std::string cleanVersion(std::string versionText) {
         auto isWhitespace = [](char character) {
@@ -1281,6 +1388,270 @@ finally {
         return parsedInstalledVersion.unwrap() < parsedLatestVersion.unwrap();
     }
 
+    // ---- in-game update download + progress overlay -----------------------
+    constexpr float UPDATE_PANEL_WIDTH = 520.f;
+    constexpr float UPDATE_PANEL_HEIGHT = 156.f;
+    constexpr float UPDATE_BAR_WIDTH = 420.f;
+    constexpr float UPDATE_BAR_HEIGHT = 16.f;
+    constexpr float UPDATE_BAR_Y = -18.f;
+
+    class UpdateOverlayLayer : public cocos2d::CCLayerColor {
+    public:
+        static UpdateOverlayLayer* create() {
+            auto layer = new UpdateOverlayLayer();
+            if (layer && layer->init()) {
+                layer->autorelease();
+                return layer;
+            }
+            CC_SAFE_DELETE(layer);
+            return nullptr;
+        }
+
+        bool init() override {
+            if (!CCLayerColor::initWithColor(ccc4(6, 8, 12, 210))) {
+                return false;
+            }
+            this->setTouchEnabled(true);
+            this->setKeypadEnabled(true);
+            return true;
+        }
+
+        // swallow every touch so the game below cannot be interacted with
+        void registerWithTouchDispatcher() override {
+            cocos2d::CCTouchDispatcher::get()->addTargetedDelegate(this, -500, true);
+        }
+        bool ccTouchBegan(cocos2d::CCTouch*, cocos2d::CCEvent*) override { return true; }
+        void ccTouchMoved(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
+        void ccTouchEnded(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
+        void ccTouchCancelled(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
+        void keyBackClicked() override {}
+    };
+
+    struct UpdateOverlayState {
+        UpdateOverlayLayer* layer = nullptr;
+        cocos2d::CCLabelBMFont* statusLabel = nullptr;
+        cocos2d::CCLabelBMFont* hintLabel = nullptr;
+        cocos2d::CCDrawNode* barFill = nullptr;
+        bool isActive = false;
+        std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+    } updateOverlay;
+
+    void setUpdateOverlayText(std::string const& text) {
+        if (updateOverlay.statusLabel) {
+            updateOverlay.statusLabel->setString(text.c_str());
+        }
+    }
+
+    void setUpdateBar(float fraction) {
+        if (!updateOverlay.barFill) {
+            return;
+        }
+        float clamped = std::max(0.f, std::min(1.f, fraction));
+        updateOverlay.barFill->clear();
+        float filledWidth = UPDATE_BAR_WIDTH * clamped;
+        if (filledWidth > 0.5f) {
+            updateOverlay.barFill->drawRect(
+                cocos2d::CCRect(0.f, -UPDATE_BAR_HEIGHT * 0.5f, filledWidth, UPDATE_BAR_HEIGHT),
+                ccc4f(0.52f, 0.84f, 0.72f, 1.f),
+                0.f,
+                ccc4f(0.f, 0.f, 0.f, 0.f)
+            );
+        }
+    }
+
+    void hideUpdateOverlay() {
+        updateOverlay.isActive = false;
+        if (updateOverlay.layer) {
+            updateOverlay.layer->removeFromParentAndCleanup(true);
+        }
+        updateOverlay.layer = nullptr;
+        updateOverlay.statusLabel = nullptr;
+        updateOverlay.hintLabel = nullptr;
+        updateOverlay.barFill = nullptr;
+    }
+
+    void failUpdateDownload(std::string const& message) {
+        hideUpdateOverlay();
+        log::warn("afterflow update failed: {}", message);
+        FLAlertLayer::create("update failed", message.c_str(), "ok")->show();
+    }
+
+    void showUpdateOverlay() {
+        auto* scene = cocos2d::CCScene::get();
+        if (!scene || updateOverlay.layer) {
+            return;
+        }
+        auto* layer = UpdateOverlayLayer::create();
+        if (!layer) {
+            return;
+        }
+        updateOverlay.layer = layer;
+
+        auto winSize = cocos2d::CCDirector::get()->getWinSize();
+        layer->setContentSize(winSize);
+        layer->ignoreAnchorPointForPosition(false);
+        layer->setAnchorPoint(CCPoint(0.f, 0.f));
+        layer->setPosition(CCPoint(0.f, 0.f));
+        scene->addChild(layer, 9999);
+
+        auto* root = cocos2d::CCNode::create();
+        root->setPosition(CCPoint(winSize.width * 0.5f, winSize.height * 0.5f));
+        layer->addChild(root, 1);
+
+        if (auto* panel = cocos2d::CCDrawNode::create()) {
+            panel->drawRect(
+                cocos2d::CCRect(
+                    -UPDATE_PANEL_WIDTH * 0.5f,
+                    -UPDATE_PANEL_HEIGHT * 0.5f,
+                    UPDATE_PANEL_WIDTH,
+                    UPDATE_PANEL_HEIGHT
+                ),
+                ccc4f(0.09f, 0.11f, 0.15f, 0.97f),
+                0.f,
+                ccc4f(0.f, 0.f, 0.f, 0.f)
+            );
+            root->addChild(panel, 1);
+        }
+
+        auto* title = cocos2d::CCLabelBMFont::create("updating afterflow", "bigFont.fnt");
+        if (title) {
+            title->setScale(0.62f);
+            title->setPosition(CCPoint(0.f, 46.f));
+            root->addChild(title, 2);
+        }
+
+        updateOverlay.statusLabel = cocos2d::CCLabelBMFont::create("Preparing download...", "bigFont.fnt");
+        if (updateOverlay.statusLabel) {
+            updateOverlay.statusLabel->setScale(0.44f);
+            updateOverlay.statusLabel->setPosition(CCPoint(0.f, 8.f));
+            root->addChild(updateOverlay.statusLabel, 2);
+        }
+
+        if (auto* track = cocos2d::CCDrawNode::create()) {
+            track->drawRect(
+                cocos2d::CCRect(-UPDATE_BAR_WIDTH * 0.5f, -UPDATE_BAR_HEIGHT * 0.5f, UPDATE_BAR_WIDTH, UPDATE_BAR_HEIGHT),
+                ccc4f(1.f, 1.f, 1.f, 0.12f),
+                0.f,
+                ccc4f(0.f, 0.f, 0.f, 0.f)
+            );
+            track->setPosition(CCPoint(0.f, UPDATE_BAR_Y));
+            root->addChild(track, 2);
+        }
+
+        updateOverlay.barFill = cocos2d::CCDrawNode::create();
+        if (updateOverlay.barFill) {
+            updateOverlay.barFill->setPosition(CCPoint(-UPDATE_BAR_WIDTH * 0.5f, UPDATE_BAR_Y));
+            root->addChild(updateOverlay.barFill, 3);
+        }
+
+        updateOverlay.hintLabel = cocos2d::CCLabelBMFont::create("do not close the game", "goldFont.fnt");
+        if (updateOverlay.hintLabel) {
+            updateOverlay.hintLabel->setScale(0.46f);
+            updateOverlay.hintLabel->setPosition(CCPoint(0.f, -52.f));
+            root->addChild(updateOverlay.hintLabel, 2);
+        }
+
+        setUpdateBar(0.f);
+    }
+
+    void updateUpdateOverlay(size_t downloaded, size_t total) {
+        if (!updateOverlay.isActive) {
+            return;
+        }
+        double elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - updateOverlay.startTime
+        ).count();
+        double downloadedMb = static_cast<double>(downloaded) / (1024.0 * 1024.0);
+        double totalMb = static_cast<double>(total) / (1024.0 * 1024.0);
+        double speed = elapsed > 0.25 ? downloadedMb / elapsed : 0.0;
+        float percent = total > 0
+            ? static_cast<float>(downloaded) * 100.f / static_cast<float>(total)
+            : 0.f;
+
+        setUpdateOverlayText(fmt::format(
+            "Downloading: {:.0f}% ({:.1f} MB / {:.1f} MB) @ {:.1f} MB/s",
+            percent,
+            downloadedMb,
+            totalMb,
+            speed
+        ));
+        setUpdateBar(total > 0
+            ? static_cast<float>(downloaded) / static_cast<float>(total)
+            : 0.f);
+    }
+
+    void startUpdateDownload(std::string const& latestVersion) {
+        if (updateOverlay.isActive) {
+            return;
+        }
+        updateOverlay.isActive = true;
+        updateOverlay.startTime = std::chrono::steady_clock::now();
+        showUpdateOverlay();
+
+        std::string assetUrl = UPDATE_ASSET_URL;
+        say("downloading update from {} (target v{})", assetUrl, latestVersion);
+
+        auto request = web::WebRequest();
+        // a stuck connection must not leave the overlay up forever
+        request.timeout(std::chrono::seconds(120));
+        request.onProgress([](web::WebProgress const& progress) {
+            size_t downloaded = progress.downloaded();
+            size_t total = progress.downloadTotal();
+            geode::queueInMainThread([downloaded, total] {
+                updateUpdateOverlay(downloaded, total);
+            });
+        });
+
+        async::spawn(
+            request.get(assetUrl),
+            [](web::WebResponse response) {
+                if (!response.ok()) {
+                    int code = response.code();
+                    geode::queueInMainThread([code] {
+                        failUpdateDownload(fmt::format("download failed (http {})", code));
+                    });
+                    return;
+                }
+
+                ByteVector bytes = response.data();
+                if (bytes.empty()) {
+                    geode::queueInMainThread([] {
+                        failUpdateDownload("download failed: empty response");
+                    });
+                    return;
+                }
+
+                geode::queueInMainThread([bytes] {
+                    setUpdateOverlayText("Installing... Please wait.");
+                    setUpdateBar(1.f);
+
+                    auto packagePath = Mod::get()->getPackagePath();
+                    // writeBinarySafe stages to a temp file and renames, so a
+                    // failed or interrupted write cannot leave a corrupt .geode
+                    auto writeResult = geode::utils::file::writeBinarySafe(packagePath, bytes);
+                    if (!writeResult.isOk()) {
+                        failUpdateDownload(fmt::format("could not write update file: {}", writeResult.unwrapErr()));
+                        return;
+                    }
+
+                    setUpdateOverlayText("Update complete! Restarting in 3 seconds...");
+                    if (updateOverlay.hintLabel) {
+                        updateOverlay.hintLabel->setString("the game will reopen");
+                    }
+                    if (updateOverlay.layer) {
+                        updateOverlay.layer->runAction(CCSequence::create(
+                            cocos2d::CCDelayTime::create(3.f),
+                            CallFuncExt::create([] {
+                                geode::utils::game::restart(true);
+                            }),
+                            nullptr
+                        ));
+                    }
+                });
+            }
+        );
+    }
+
     struct UpdateNotice {
         bool isShown = false;
         std::string urlText;
@@ -1297,15 +1668,14 @@ finally {
             return false;
         }
         pendingUpdateNotice.isShown = true;
-        auto urlText = pendingUpdateNotice.urlText;
+        auto latestVersion = pendingUpdateNotice.latestVersion;
         createQuickPopup(
             "afterflow out of date",
             fmt::format("v{} installed, latest is {}", pendingUpdateNotice.installedVersion, pendingUpdateNotice.latestVersion),
             "dismiss", "update",
-            [urlText](FLAlertLayer*, bool isUpdate) {
+            [latestVersion](FLAlertLayer*, bool isUpdate) {
                 if (isUpdate) {
-
-                    web::openLinkInBrowser(urlText);
+                    startUpdateDownload(latestVersion);
                 }
                 if (auto* menuScene = CCScene::get()) {
                     menuScene->runAction(CCSequence::create(
@@ -1607,6 +1977,9 @@ finally {
 #endif
 
     void closeTerminal() {
+        if (isMobileHost()) {
+            return;
+        }
         if (hostOS() == HostOS::Linux) {
             ensureWineRuntimeDir();
             auto closePath = wineRuntimeDir() / "close";
@@ -1829,6 +2202,2015 @@ finally {
         }
         return fmt::format("stage {}: {} ticks all | {} ticks wave ({:g}f all | {:g}f wave @ 60fps)",
             state.stageIndex + 1, state.ticksAllModes, state.ticksWaveMode, state.ticksAllModes / 4.f, state.ticksWaveMode / 4.f);
+    }
+
+    constexpr float DECK_WIDTH = 700.f;
+    constexpr float DECK_HEIGHT = 460.f;
+    constexpr float DECK_RADIUS = 22.f;
+    constexpr float MARGIN = 24.f;
+    constexpr float CONTENT_X = MARGIN;
+    constexpr float CONTENT_WIDTH = DECK_WIDTH - MARGIN * 2.f;
+    constexpr float CONTENT_RIGHT = CONTENT_X + CONTENT_WIDTH;
+
+    constexpr float HEADER_Y = 428.f;
+    constexpr float STATUS_HEIGHT = 28.f;
+
+    constexpr int TAB_COUNT = 3;
+    constexpr float TAB_LABEL_Y = 388.f;
+    constexpr float TAB_UNDERLINE_Y = 366.f;
+    constexpr float TAB_HIT_HEIGHT = 36.f;
+    constexpr float TAB_SLOT_WIDTH = CONTENT_WIDTH / static_cast<float>(TAB_COUNT);
+
+    constexpr float CARD_TOP = 350.f;
+    constexpr float CARD_BOTTOM = 76.f;
+    constexpr float CARD_HEIGHT = CARD_TOP - CARD_BOTTOM;
+    constexpr float CARD_RADIUS = 16.f;
+
+    constexpr float LOG_X = CONTENT_X;
+    constexpr float LOG_Y = CARD_BOTTOM;
+    constexpr float LOG_WIDTH = CONTENT_WIDTH;
+    constexpr float LOG_HEIGHT = CARD_HEIGHT;
+    constexpr float LOG_HEADER_Y = 320.f;
+    constexpr float LOG_DIVIDER_Y = 302.f;
+    constexpr float LOG_LINE_START_Y = 282.f;
+    constexpr float LOG_LINE_STEP = 44.f;
+    constexpr int LOG_LINE_COUNT = 5;
+
+    constexpr float STAGE_NAME_Y = 314.f;
+    constexpr float STAGE_META_Y = 274.f;
+
+    constexpr float STAGE_TRACK_X = CONTENT_X + 20.f;
+    constexpr float STAGE_TRACK_Y = 212.f;
+    constexpr float STAGE_TRACK_WIDTH = CONTENT_WIDTH - 40.f;
+    constexpr float STAGE_TRACK_HEIGHT = 36.f;
+    constexpr float STAGE_TRACK_PADDING = 4.f;
+    constexpr float STAGE_TRACK_GAP = 3.f;
+    constexpr float STAGE_SLOT_WIDTH = (STAGE_TRACK_WIDTH - STAGE_TRACK_PADDING * 2.f -
+        STAGE_TRACK_GAP * static_cast<float>(STAGE_TABLE_SIZE - 1)) / static_cast<float>(STAGE_TABLE_SIZE);
+    constexpr float STAGE_CELL_HEIGHT = 28.f;
+    constexpr float STAGE_LABEL_Y = STAGE_TRACK_Y + STAGE_TRACK_HEIGHT * 0.5f;
+
+    constexpr float STAGE_TIMING_ALL_Y = 162.f;
+    constexpr float STAGE_TIMING_WAVE_Y = 118.f;
+    constexpr float STAGE_HINT_Y = 92.f;
+    constexpr float STAGE_BAR_X = CONTENT_X + 150.f;
+    constexpr float STAGE_BAR_WIDTH = CONTENT_RIGHT - 20.f - STAGE_BAR_X;
+
+    constexpr float COPY_X = CONTENT_RIGHT - 20.f - 74.f;
+    constexpr float COPY_Y = LOG_HEADER_Y - 16.f;
+    constexpr float COPY_WIDTH = 74.f;
+    constexpr float COPY_HEIGHT = 32.f;
+
+    constexpr float DISMISS_X = CONTENT_RIGHT - 30.f;
+    constexpr float DISMISS_Y = HEADER_Y - 15.f;
+    constexpr float DISMISS_WIDTH = 30.f;
+    constexpr float DISMISS_HEIGHT = 30.f;
+
+    constexpr int THEME_COUNT = 6;
+    constexpr float SWATCH_WIDTH = 94.f;
+    constexpr float SWATCH_HEIGHT = 38.f;
+    constexpr float SWATCH_GAP = 8.f;
+    constexpr float SWATCH_X = CONTENT_X + 20.f;
+    constexpr float SWATCH_Y = 272.f;
+    constexpr float SETTINGS_ROW_Y[2] = { 190.f, 142.f };
+
+    constexpr int MODE_ICON_COUNT = 8;
+    constexpr float MODE_ICON_STEP = 32.f;
+    constexpr float MODE_ICON_SIZE = 28.f;
+    constexpr float MODE_ICON_X =
+        CONTENT_X + (CONTENT_WIDTH - MODE_ICON_STEP * static_cast<float>(MODE_ICON_COUNT)) * 0.5f;
+    constexpr float MODE_ICON_Y = 240.f;
+
+    constexpr float CONFIG_BUTTON_Y = 98.f;
+    constexpr float CONFIG_BUTTON_WIDTH = 120.f;
+    constexpr float CONFIG_BUTTON_HEIGHT = 34.f;
+    constexpr float CONFIG_BUTTON_X = CONTENT_X + 16.f;
+    constexpr float CONFIG_BUTTON_GAP = 10.f;
+    constexpr float CONFIG_EXPORT_X = CONFIG_BUTTON_X + CONFIG_BUTTON_WIDTH + CONFIG_BUTTON_GAP;
+
+    constexpr int CHIP_COUNT = 3;
+    constexpr float CHIP_WIDTH = 118.f;
+    constexpr float CHIP_HEIGHT = 30.f;
+    constexpr float CHIP_GAP = 3.f;
+    constexpr float CHIP_Y = 22.f;
+    constexpr float CHIP_X = MARGIN;
+    constexpr float TERMINAL_Y = 22.f;
+    constexpr float TERMINAL_WIDTH = 118.f;
+    constexpr float TERMINAL_HEIGHT = 30.f;
+    constexpr float TERMINAL_X = CONTENT_RIGHT - TERMINAL_WIDTH;
+
+    ccColor4F color4(int red, int green, int blue, int alpha = 255) {
+        return ccc4f(red / 255.f, green / 255.f, blue / 255.f, alpha / 255.f);
+    }
+
+    ccColor3B color3(int red, int green, int blue) {
+        return ccc3(static_cast<GLubyte>(red), static_cast<GLubyte>(green), static_cast<GLubyte>(blue));
+    }
+
+    ccColor4F color4(ccColor3B color, int alpha = 255) {
+        return ccc4f(color.r / 255.f, color.g / 255.f, color.b / 255.f, alpha / 255.f);
+    }
+
+    ccColor3B hexColor(int rgb) {
+        return color3((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+    }
+
+    bool jsonInt(std::string const& json, char const* key, int& out) {
+        std::string needle = std::string("\"") + key + "\"";
+        size_t pos = json.find(needle);
+        if (pos == std::string::npos) {
+            return false;
+        }
+        pos = json.find(':', pos + needle.size());
+        if (pos == std::string::npos) {
+            return false;
+        }
+        ++pos;
+        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
+            ++pos;
+        }
+        bool negative = false;
+        if (pos < json.size() && (json[pos] == '-' || json[pos] == '+')) {
+            negative = json[pos] == '-';
+            ++pos;
+        }
+        if (pos >= json.size() || !std::isdigit(static_cast<unsigned char>(json[pos]))) {
+            return false;
+        }
+        long long value = 0;
+        while (pos < json.size() && std::isdigit(static_cast<unsigned char>(json[pos]))) {
+            value = value * 10 + static_cast<long long>(json[pos] - '0');
+            ++pos;
+            if (value > 10000000) {
+                break;
+            }
+        }
+        out = static_cast<int>(negative ? -value : value);
+        return true;
+    }
+
+    struct UITheme {
+        char const* name;
+        int primary;
+        int secondary;
+        int surface;
+        int text;
+    };
+
+    UITheme const THEMES[THEME_COUNT] = {
+        { "violet", 0x7C4DFF, 0xB79CFF, 0x16161A, 0xE8E9EE },
+        { "ocean",  0x3BA3FF, 0x8FD0FF, 0x121820, 0xE6EDF5 },
+        { "mint",   0x34D399, 0x8EE8C4, 0x101A17, 0xE4F2EC },
+        { "amber",  0xFFB454, 0xFFD79B, 0x1B1712, 0xF4EDE3 },
+        { "rose",   0xFF6B8A, 0xFFB3C3, 0x1B1418, 0xF5E8EC },
+        { "mono",   0xC9CDD6, 0xFFFFFF, 0x15161A, 0xEDEEF2 },
+    };
+
+    ccColor3B accentColor() {
+        return getUIPrimaryColor();
+    }
+
+    ccColor3B secondaryColor() {
+        return getUISecondaryColor();
+    }
+
+    ccColor3B warningColor() {
+        return color3(255, 176, 102);
+    }
+
+    ccColor3B blendTextColor(float factor) {
+        ccColor3B base = getUITextColor();
+        return color3(static_cast<int>(base.r * factor), static_cast<int>(base.g * factor), static_cast<int>(base.b * factor));
+    }
+
+    ccColor3B softTextColor() {
+        return blendTextColor(0.68f);
+    }
+
+    ccColor3B logTextColor() {
+        return getUITextColor();
+    }
+
+    ccColor3B faintTextColor() {
+        return blendTextColor(0.46f);
+    }
+
+    char const* displayFont() {
+        static char const* font = geode::cocos::fileExistsInSearchPaths("afterflow-display.fnt"_spr) ? "afterflow-display.fnt"_spr : "bigFont.fnt";
+        return font;
+    }
+
+    char const* bodyFont() {
+        static char const* font = geode::cocos::fileExistsInSearchPaths("afterflow-body.fnt"_spr) ? "afterflow-body.fnt"_spr : "bigFont.fnt";
+        return font;
+    }
+
+    CCLabelBMFont* makeLabel(std::string const& text, bool isDisplay, float scale, ccColor3B color) {
+        auto* label = CCLabelBMFont::create(text.c_str(), isDisplay ? displayFont() : bodyFont());
+        if (!label) {
+            return nullptr;
+        }
+        label->setScale(scale * getUIFontScale());
+        label->setColor(color);
+        return label;
+    }
+
+    // CCDrawNode is created with a premultiplied blend while its shader emits
+    // straight alpha. Forcing standard alpha blending keeps translucent fills
+    // from turning into opaque white blocks.
+    CCDrawNode* makeDrawNode() {
+        auto* node = CCDrawNode::create();
+        if (node) {
+            node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
+        }
+        return node;
+    }
+
+    CCSprite* makeLogoMark(float size) {
+        auto* sprite = CCSprite::create("afterflow-logo.png"_spr);
+        if (!sprite) {
+            return nullptr;
+        }
+        auto content = sprite->getContentSize();
+        float longestSide = std::max(content.width, content.height);
+        if (longestSide > 0.f) {
+            sprite->setScale(size / longestSide);
+        }
+        return sprite;
+    }
+
+    void drawCurvedRect(CCDrawNode* node, CCRect const& rect, float radius, ccColor4F fill, ccColor4F border, float borderWidth) {
+        if (!node || rect.size.width <= 0.f || rect.size.height <= 0.f) {
+            return;
+        }
+        float left = rect.getMinX();
+        float right = rect.getMaxX();
+        float bottom = rect.getMinY();
+        float top = rect.getMaxY();
+        radius = std::clamp(radius, 0.f, std::min(rect.size.width, rect.size.height) * 0.5f);
+        if (radius <= 0.01f) {
+            CCPoint points[4] = {
+                CCPoint(left, bottom),
+                CCPoint(right, bottom),
+                CCPoint(right, top),
+                CCPoint(left, top),
+            };
+            node->drawPolygon(points, 4, fill, borderWidth, border);
+            return;
+        }
+
+        constexpr int SEGMENTS = 24;
+        constexpr float PI = 3.14159265358979323846f;
+        CCPoint points[4 * (SEGMENTS + 1)];
+        int count = 0;
+        auto addArc = [&](float centerX, float centerY, float startAngle, float endAngle) {
+            for (int index = 0; index <= SEGMENTS; ++index) {
+                float angle = startAngle + (endAngle - startAngle) * static_cast<float>(index) / static_cast<float>(SEGMENTS);
+                points[count++] = CCPoint(centerX + std::cos(angle) * radius, centerY + std::sin(angle) * radius);
+            }
+        };
+        addArc(right - radius, bottom + radius, -PI * 0.5f, 0.f);
+        addArc(right - radius, top - radius, 0.f, PI * 0.5f);
+        addArc(left + radius, top - radius, PI * 0.5f, PI);
+        addArc(left + radius, bottom + radius, PI, PI * 1.5f);
+        node->drawPolygon(points, static_cast<unsigned int>(count), fill, borderWidth, border);
+    }
+
+    CCRect stageSlotRect(int index) {
+        return CCRect(
+            STAGE_TRACK_X + STAGE_TRACK_PADDING + static_cast<float>(index) * (STAGE_SLOT_WIDTH + STAGE_TRACK_GAP),
+            STAGE_TRACK_Y,
+            STAGE_SLOT_WIDTH,
+            STAGE_TRACK_HEIGHT
+        );
+    }
+
+    CCRect stageCellRect(int index) {
+        auto slot = stageSlotRect(index);
+        return CCRect(
+            slot.getMinX(),
+            STAGE_TRACK_Y + (STAGE_TRACK_HEIGHT - STAGE_CELL_HEIGHT) * 0.5f,
+            slot.size.width,
+            STAGE_CELL_HEIGHT
+        );
+    }
+
+    CCRect chipRect(int index) {
+        return CCRect(CHIP_X + static_cast<float>(index) * (CHIP_WIDTH + CHIP_GAP), CHIP_Y, CHIP_WIDTH, CHIP_HEIGHT);
+    }
+
+    char const* chipName(int index) {
+        static char const* names[CHIP_COUNT] = { "console", "wave", "path" };
+        if (index < 0 || index >= CHIP_COUNT) {
+            return "";
+        }
+        return names[index];
+    }
+
+    CCRect tabSlotRect(int index) {
+        return CCRect(
+            CONTENT_X + static_cast<float>(index) * TAB_SLOT_WIDTH,
+            TAB_LABEL_Y - TAB_HIT_HEIGHT * 0.5f,
+            TAB_SLOT_WIDTH,
+            TAB_HIT_HEIGHT
+        );
+    }
+
+    char const* tabName(int index) {
+        static char const* names[TAB_COUNT] = { "log", "stage", "settings" };
+        if (index < 0 || index >= TAB_COUNT) {
+            return "";
+        }
+        return names[index];
+    }
+
+    CCRect configButtonRect(int index) {
+        float x = (index == 0) ? CONFIG_BUTTON_X : CONFIG_EXPORT_X;
+        return CCRect(x, CONFIG_BUTTON_Y - CONFIG_BUTTON_HEIGHT * 0.5f, CONFIG_BUTTON_WIDTH, CONFIG_BUTTON_HEIGHT);
+    }
+
+    CCRect swatchRect(int index) {
+        return CCRect(SWATCH_X + static_cast<float>(index) * (SWATCH_WIDTH + SWATCH_GAP), SWATCH_Y, SWATCH_WIDTH, SWATCH_HEIGHT);
+    }
+
+    CCRect settingsRowRect(int row) {
+        float y = (row >= 0 && row < 2) ? SETTINGS_ROW_Y[row] : SETTINGS_ROW_Y[0];
+        return CCRect(CONTENT_X + 16.f, y - 22.f, CONTENT_WIDTH - 32.f, 44.f);
+    }
+
+    char const* stageName(int index) {
+        static char const* names[STAGE_TABLE_SIZE] = {
+            "tight", "quick", "steady", "flow", "deep", "wide", "max", "raw",
+        };
+        if (index < 0 || index >= STAGE_TABLE_SIZE) {
+            return "unknown";
+        }
+        return names[index];
+    }
+    CCNode* makeDeckButton(CCNode* parent, CCRect const& rect, std::string const& text, bool isFilled, bool useDisplayFont, float fontScale, bool isTinted = false) {
+        auto* button = CCNode::create();
+        button->setContentSize(CCSize(rect.size.width, rect.size.height));
+        button->setAnchorPoint(CCPoint(0.5f, 0.5f));
+        button->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
+
+        ccColor4F transparent = color4(0, 0, 0, 0);
+        auto* background = makeDrawNode();
+        float radius = rect.size.height * 0.44f;
+        if (isFilled) {
+            drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(accentColor(), 238), color4(255, 255, 255, 44), 1.f);
+        }
+        else if (isTinted) {
+            drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(accentColor(), 30), color4(accentColor(), 95), 1.f);
+        }
+        else {
+            drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(255, 255, 255, 10), color4(255, 255, 255, 30), 1.f);
+        }
+        button->addChild(background);
+
+        if (auto* label = makeLabel(text, useDisplayFont, fontScale, isFilled || isTinted ? secondaryColor() : softTextColor())) {
+            label->setPosition(CCPoint(rect.size.width * 0.5f, rect.size.height * 0.5f));
+            button->addChild(label);
+        }
+        parent->addChild(button, 4);
+        return button;
+    }
+
+    CCNode* makeStepButton(CCNode* parent, CCRect const& rect, bool pointsForward) {
+        auto* button = CCNode::create();
+        button->setContentSize(CCSize(rect.size.width, rect.size.height));
+        button->setAnchorPoint(CCPoint(0.5f, 0.5f));
+        button->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
+
+        auto* background = makeDrawNode();
+
+        float midX = rect.size.width * 0.5f;
+        float midY = rect.size.height * 0.5f;
+        drawCurvedRect(
+            background,
+            CCRect(0.f, 0.f, rect.size.width, rect.size.height),
+            12.f,
+            color4(255, 255, 255, 6),
+            color4(255, 255, 255, 18),
+            1.f
+        );
+
+        CCPoint top = CCPoint(pointsForward ? midX - 3.5f : midX + 3.5f, midY + 8.f);
+        CCPoint tip = CCPoint(pointsForward ? midX + 4.5f : midX - 4.5f, midY);
+        CCPoint bottom = CCPoint(pointsForward ? midX - 3.5f : midX + 3.5f, midY - 8.f);
+        background->drawSegment(top, tip, 2.f, color4(softTextColor(), 245));
+        background->drawSegment(tip, bottom, 2.f, color4(softTextColor(), 245));
+        button->addChild(background);
+        parent->addChild(button, 4);
+        return button;
+    }
+
+    std::string singleLineLog(std::string text) {
+        for (auto& character : text) {
+            if (character == '\n' || character == '\r' || character == '\t') {
+                character = ' ';
+            }
+        }
+        constexpr size_t MAX_LENGTH = 30;
+        if (text.size() > MAX_LENGTH) {
+            text.resize(MAX_LENGTH - 3);
+            text += "...";
+        }
+        return text;
+    }
+
+    std::string fitLogLine(CCLabelBMFont* label, std::string text, float maxWidth) {
+        if (!label) {
+            return text;
+        }
+        label->setString(text.c_str());
+        if (label->getContentSize().width * label->getScale() <= maxWidth) {
+            return text;
+        }
+        while (text.size() > 3) {
+            text.pop_back();
+            std::string candidate = text + "...";
+            label->setString(candidate.c_str());
+            if (label->getContentSize().width * label->getScale() <= maxWidth) {
+                return candidate;
+            }
+        }
+        label->setString("");
+        return {};
+    }
+
+    template <class T>
+    T* findDescendant(CCNode* node) {
+        if (!node) {
+            return nullptr;
+        }
+        if (auto* match = node->getChildByType<T>(0)) {
+            return match;
+        }
+        if (auto* children = node->getChildren()) {
+            for (unsigned int index = 0; index < children->count(); ++index) {
+                auto* child = static_cast<CCNode*>(children->objectAtIndex(index));
+                if (auto* match = findDescendant<T>(child)) {
+                    return match;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    class AfterflowOverlay : public CCLayer {
+    public:
+        static AfterflowOverlay* create();
+        bool init() override;
+        void onEnter() override;
+        void onExit() override;
+        void refresh();
+        void rebuildDeck();
+        void openPanel();
+        void closePanel();
+        void togglePanel();
+
+    protected:
+        bool ccTouchBegan(CCTouch* touch, CCEvent* event) override;
+        void ccTouchMoved(CCTouch* touch, CCEvent* event) override;
+        void ccTouchEnded(CCTouch* touch, CCEvent* event) override;
+        void ccTouchCancelled(CCTouch* touch, CCEvent* event) override;
+        void registerWithTouchDispatcher() override;
+
+    private:
+        enum class HitTarget {
+            None,
+            Outside,
+            Dismiss,
+            StageBack,
+            StageForward,
+            CopyLog,
+            Terminal,
+            StageSlot,
+            Tab,
+            Chip,
+            Theme,
+            SettingsRow,
+            ImportConfig,
+            ExportConfig,
+        };
+
+        void buildDeck();
+        void applyTab();
+        void applyChip();
+        void applyTheme(int index);
+        void exportConfig();
+        void importConfig();
+        void updateModeIcons();
+        void setConfigStatus(std::string const& text, bool ok);
+        void layout();
+        CCPoint defaultLauncherPosition() const;
+        CCPoint clampLauncherPosition(CCPoint const& position) const;
+        void saveLauncherPosition();
+        HitTarget hitTest(CCPoint const& point, int* stageSlot = nullptr) const;
+        CCNode* nodeForTarget(HitTarget target) const;
+        void pressTarget(HitTarget target);
+        void restorePressed();
+        void performTarget(HitTarget target);
+        void copyLog();
+        void pauseForPanel();
+        void resumeFromPanel();
+        void removePauseLayers();
+        void updateHints();
+        void tickRefresh(float dt);
+
+        CCLayerColor* m_scrim = nullptr;
+        CCNodeRGBA* m_deck = nullptr;
+        CCNode* m_launcher = nullptr;
+        CCDrawNode* m_shell = nullptr;
+        CCDrawNode* m_stageTrack = nullptr;
+        CCDrawNode* m_logHighlight = nullptr;
+        CCDrawNode* m_statusBeacon = nullptr;
+        CCLabelBMFont* m_statusLabel = nullptr;
+        CCLabelBMFont* m_statusDetailLabel = nullptr;
+        CCLabelBMFont* m_stageIndexLabel = nullptr;
+        CCLabelBMFont* m_stageNameLabel = nullptr;
+        CCLabelBMFont* m_stageDescriptionLabel = nullptr;
+        CCLabelBMFont* m_stagePlaceholderLabel = nullptr;
+        CCLabelBMFont* m_activityLabel = nullptr;
+        CCLabelBMFont* m_activityCountLabel = nullptr;
+        CCLabelBMFont* m_activityLines[LOG_LINE_COUNT] = {};
+        CCLabelBMFont* m_stageNameLabels[STAGE_TABLE_SIZE] = {};
+        CCLabelBMFont* m_stageHintKeyLabel = nullptr;
+        CCLabelBMFont* m_stageHintLabel = nullptr;
+        CCLabelBMFont* m_panelHintKeyLabel = nullptr;
+        CCLabelBMFont* m_panelHintLabel = nullptr;
+        CCLabelBMFont* m_copyLabel = nullptr;
+        CCDrawNode* m_tabBar = nullptr;
+        CCLabelBMFont* m_tabLabels[TAB_COUNT] = {};
+        CCNode* m_logPane = nullptr;
+        CCNode* m_stagePane = nullptr;
+        CCNode* m_modesPane = nullptr;
+        CCNode* m_toolsPane = nullptr;
+        CCLabelBMFont* m_modesWaveLabel = nullptr;
+        CCLabelBMFont* m_modesStageLabel = nullptr;
+        CCLabelBMFont* m_modesNameLabels[4] = {};
+        CCLabelBMFont* m_modesValueLabels[4] = {};
+        CCLabelBMFont* m_toolsTitleLabels[3] = {};
+        CCLabelBMFont* m_toolsDescLabels[3] = {};
+        CCLabelBMFont* m_stageTimingLabels[4] = {};
+        CCLabelBMFont* m_settingsHeaderLabel = nullptr;
+        CCLabelBMFont* m_settingsValueLabels[2] = {};
+        CCLabelBMFont* m_settingsHintLabel = nullptr;
+        CCLabelBMFont* m_settingsThemeLabels[THEME_COUNT] = {};
+        CCDrawNode* m_settingsBar = nullptr;
+        CCDrawNode* m_themeSwatches = nullptr;
+        CCDrawNode* m_glow = nullptr;
+        CCNode* m_modeIconContainer = nullptr;
+        SimplePlayer* m_modeIcons[MODE_ICON_COUNT] = {};
+        CCLabelBMFont* m_configStatusLabel = nullptr;
+        CCNode* m_importButton = nullptr;
+        CCNode* m_exportButton = nullptr;
+        int m_activeTab = 0;
+        CCDrawNode* m_chipBar = nullptr;
+        CCLabelBMFont* m_chipLabels[CHIP_COUNT] = {};
+        CCNode* m_stageBackButton = nullptr;
+        CCNode* m_stageForwardButton = nullptr;
+        CCNode* m_copyButton = nullptr;
+        CCNode* m_dismissButton = nullptr;
+        CCNode* m_terminalButton = nullptr;
+        CCRect m_safeArea;
+        CCPoint m_launcherPosition;
+        CCPoint m_launcherDragStart;
+        CCPoint m_launcherDragOffset;
+        float m_deckScale = 1.f;
+        bool m_isOpen = false;
+        bool m_didPauseForPanel = false;
+        bool m_isDraggingLauncher = false;
+        bool m_launcherMoved = false;
+        HitTarget m_pressedTarget = HitTarget::None;
+        int m_pressedStageSlot = -1;
+        CCNode* m_pressedNode = nullptr;
+    };
+
+    AfterflowOverlay* AfterflowOverlay::create() {
+        auto* overlay = new AfterflowOverlay();
+        if (overlay && overlay->init()) {
+            overlay->autorelease();
+            return overlay;
+        }
+        delete overlay;
+        return nullptr;
+    }
+
+    bool AfterflowOverlay::init() {
+        if (!CCLayer::init()) {
+            return false;
+        }
+        auto winSize = CCDirector::get()->getWinSize();
+        setContentSize(winSize);
+        setAnchorPoint(CCPoint(0.f, 0.f));
+        setPosition(CCPoint(0.f, 0.f));
+        setTouchMode(kCCTouchesOneByOne);
+        setTouchPriority(-1000);
+        setTouchEnabled(isMobileHost());
+
+        m_scrim = CCLayerColor::create(ccc4(0, 0, 0, 255), winSize.width, winSize.height);
+        m_scrim->setOpacity(0);
+        m_scrim->setVisible(false);
+        addChild(m_scrim, 0);
+
+        m_deck = CCNodeRGBA::create();
+        m_deck->setContentSize(CCSize(DECK_WIDTH, DECK_HEIGHT));
+        m_deck->setAnchorPoint(CCPoint(0.5f, 0.5f));
+        m_deck->setVisible(false);
+        addChild(m_deck, 1);
+
+        buildDeck();
+
+        m_launcher = CCNode::create();
+        m_launcher->setContentSize(CCSize(68.f, 68.f));
+        m_launcher->setAnchorPoint(CCPoint(0.5f, 0.5f));
+
+        auto* launcherHalo = makeDrawNode();
+        launcherHalo->drawCircle(CCPoint(34.f, 34.f), 33.f, color4(accentColor(), 13), 0.f, color4(0, 0, 0, 0), 48);
+        m_launcher->addChild(launcherHalo);
+        if (auto* launcherLogo = makeLogoMark(56.f)) {
+            launcherLogo->setPosition(CCPoint(34.f, 34.f));
+            m_launcher->addChild(launcherLogo, 1);
+        }
+        m_launcher->setVisible(false);
+        addChild(m_launcher, 2);
+
+        layout();
+        refresh();
+        return true;
+    }
+
+    void AfterflowOverlay::buildDeck() {
+        ccColor4F none = color4(0, 0, 0, 0);
+
+        // rebuildDeck() frees every child, so every member pointer must be
+        // reset here or applyTab()/refresh() would touch freed memory.
+        m_shell = nullptr;
+        m_stageTrack = nullptr;
+        m_logHighlight = nullptr;
+        m_statusBeacon = nullptr;
+        m_statusLabel = nullptr;
+        m_statusDetailLabel = nullptr;
+        m_stageIndexLabel = nullptr;
+        m_stageNameLabel = nullptr;
+        m_stageDescriptionLabel = nullptr;
+        m_stagePlaceholderLabel = nullptr;
+        m_activityLabel = nullptr;
+        m_activityCountLabel = nullptr;
+        m_stageHintKeyLabel = nullptr;
+        m_stageHintLabel = nullptr;
+        m_panelHintKeyLabel = nullptr;
+        m_panelHintLabel = nullptr;
+        m_copyLabel = nullptr;
+        m_tabBar = nullptr;
+        m_logPane = nullptr;
+        m_stagePane = nullptr;
+        m_modesPane = nullptr;
+        m_toolsPane = nullptr;
+        m_modesWaveLabel = nullptr;
+        m_modesStageLabel = nullptr;
+        m_chipBar = nullptr;
+        m_stageBackButton = nullptr;
+        m_stageForwardButton = nullptr;
+        m_copyButton = nullptr;
+        m_dismissButton = nullptr;
+        m_terminalButton = nullptr;
+        m_settingsHeaderLabel = nullptr;
+        m_settingsHintLabel = nullptr;
+        m_settingsBar = nullptr;
+        m_themeSwatches = nullptr;
+        m_glow = nullptr;
+        m_modeIconContainer = nullptr;
+        m_configStatusLabel = nullptr;
+        m_importButton = nullptr;
+        m_exportButton = nullptr;
+        for (int index = 0; index < MODE_ICON_COUNT; ++index) { m_modeIcons[index] = nullptr; }
+        for (int index = 0; index < LOG_LINE_COUNT; ++index) { m_activityLines[index] = nullptr; }
+        for (int index = 0; index < STAGE_TABLE_SIZE; ++index) { m_stageNameLabels[index] = nullptr; }
+        for (int index = 0; index < TAB_COUNT; ++index) { m_tabLabels[index] = nullptr; }
+        for (int index = 0; index < CHIP_COUNT; ++index) { m_chipLabels[index] = nullptr; }
+        for (int index = 0; index < 4; ++index) {
+            m_stageTimingLabels[index] = nullptr;
+            m_modesNameLabels[index] = nullptr;
+            m_modesValueLabels[index] = nullptr;
+        }
+        for (int index = 0; index < 3; ++index) {
+            m_toolsTitleLabels[index] = nullptr;
+            m_toolsDescLabels[index] = nullptr;
+        }
+        for (int index = 0; index < THEME_COUNT; ++index) { m_settingsThemeLabels[index] = nullptr; }
+        for (int index = 0; index < 2; ++index) { m_settingsValueLabels[index] = nullptr; }
+        ccColor3B surface = getUISurfaceColor();
+        ccColor3B shellTint = color3(
+            static_cast<int>(surface.r * 0.88f),
+            static_cast<int>(surface.g * 0.88f),
+            static_cast<int>(surface.b * 0.92f)
+        );
+
+        m_glow = makeDrawNode();
+        m_deck->addChild(m_glow, 0);
+        if (getUIGlow()) {
+            for (int ring = 5; ring >= 1; --ring) {
+                float spread = 3.5f * static_cast<float>(ring);
+                drawCurvedRect(
+                    m_glow,
+                    CCRect(-spread, -spread, DECK_WIDTH + spread * 2.f, DECK_HEIGHT + spread * 2.f),
+                    DECK_RADIUS + spread,
+                    color4(accentColor(), 3),
+                    none,
+                    0.f
+                );
+            }
+        }
+
+        m_shell = makeDrawNode();
+        m_deck->addChild(m_shell, 1);
+        drawCurvedRect(m_shell, CCRect(-12.f, -22.f, DECK_WIDTH + 24.f, DECK_HEIGHT + 22.f), DECK_RADIUS + 14.f, color4(0, 0, 0, 72), none, 0.f);
+        drawCurvedRect(m_shell, CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT), DECK_RADIUS, color4(shellTint, 252), color4(255, 255, 255, 26), 1.f);
+        drawCurvedRect(m_shell, CCRect(CONTENT_X, CARD_BOTTOM, CONTENT_WIDTH, CARD_HEIGHT), CARD_RADIUS, color4(surface, 255), color4(255, 255, 255, 18), 1.f);
+
+        m_tabBar = makeDrawNode();
+        m_deck->addChild(m_tabBar, 2);
+        for (int tabIndex = 0; tabIndex < TAB_COUNT; ++tabIndex) {
+            auto slot = tabSlotRect(tabIndex);
+            if (auto* tabLabel = makeLabel(tabName(tabIndex), true, 0.66f, faintTextColor())) {
+                tabLabel->setAnchorPoint(CCPoint(0.5f, 0.5f));
+                tabLabel->setPosition(CCPoint(slot.getMidX(), TAB_LABEL_Y));
+                m_deck->addChild(tabLabel, 3);
+                m_tabLabels[tabIndex] = tabLabel;
+            }
+        }
+
+        if (auto* mark = makeLogoMark(34.f)) {
+            mark->setPosition(CCPoint(MARGIN + 17.f, HEADER_Y));
+            m_deck->addChild(mark, 3);
+        }
+
+        auto* brandName = makeLabel("afterflow", true, 0.84f, color3(242, 243, 248));
+        brandName->setAnchorPoint(CCPoint(0.f, 0.5f));
+        brandName->setPosition(CCPoint(MARGIN + 42.f, HEADER_Y));
+        m_deck->addChild(brandName, 3);
+
+        m_statusBeacon = makeDrawNode();
+        m_deck->addChild(m_statusBeacon, 2);
+
+        m_statusLabel = makeLabel("buffer on", false, 0.68f, secondaryColor());
+        m_statusLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_statusLabel->setPosition(CCPoint(CONTENT_RIGHT - 170.f, HEADER_Y));
+        m_deck->addChild(m_statusLabel, 3);
+
+        m_dismissButton = makeDeckButton(
+            m_deck,
+            CCRect(DISMISS_X, DISMISS_Y, DISMISS_WIDTH, DISMISS_HEIGHT),
+            "x",
+            false,
+            true,
+            0.62f
+        );
+
+        // ---- log pane ---------------------------------------------------------
+        m_logHighlight = makeDrawNode();
+        m_deck->addChild(m_logHighlight, 1);
+
+        m_activityLabel = makeLabel("log", true, 0.68f, logTextColor());
+        m_activityLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_activityLabel->setPosition(CCPoint(LOG_X + 22.f, LOG_HEADER_Y));
+        m_deck->addChild(m_activityLabel, 3);
+
+        float activityWidth = m_activityLabel->getContentSize().width * m_activityLabel->getScale();
+        m_activityCountLabel = makeLabel("/ 0 events", false, 0.62f, softTextColor());
+        m_activityCountLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_activityCountLabel->setPosition(CCPoint(LOG_X + 22.f + activityWidth + 10.f, LOG_HEADER_Y));
+        m_deck->addChild(m_activityCountLabel, 3);
+
+        m_copyButton = makeDeckButton(
+            m_deck,
+            CCRect(COPY_X, COPY_Y, COPY_WIDTH, COPY_HEIGHT),
+            "copy",
+            false,
+            false,
+            0.60f
+        );
+        m_copyLabel = m_copyButton->getChildByType<CCLabelBMFont>(0);
+
+        for (int index = 0; index < LOG_LINE_COUNT; ++index) {
+            auto* line = makeLabel("", false, 0.96f, logTextColor());
+            line->setAnchorPoint(CCPoint(0.f, 0.5f));
+            line->setPosition(CCPoint(LOG_X + 22.f, LOG_LINE_START_Y - static_cast<float>(index) * LOG_LINE_STEP));
+            m_deck->addChild(line, 3);
+            m_activityLines[index] = line;
+        }
+
+        // ---- stage pane -------------------------------------------------------
+        m_stageNameLabel = makeLabel("tight", true, 0.88f, color3(240, 241, 246));
+        m_stageNameLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_stageNameLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_NAME_Y));
+        m_deck->addChild(m_stageNameLabel, 3);
+
+        m_stageIndexLabel = makeLabel("01/08", true, 0.58f, accentColor());
+        m_stageIndexLabel->setAnchorPoint(CCPoint(1.f, 0.5f));
+        m_stageIndexLabel->setPosition(CCPoint(CONTENT_RIGHT - 22.f, STAGE_NAME_Y));
+        m_deck->addChild(m_stageIndexLabel, 3);
+
+        m_stageDescriptionLabel = makeLabel("", false, 0.74f, softTextColor());
+        m_stageDescriptionLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_stageDescriptionLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_META_Y));
+        m_deck->addChild(m_stageDescriptionLabel, 3);
+
+        m_stageTrack = makeDrawNode();
+        m_deck->addChild(m_stageTrack, 1);
+        for (int index = 0; index < STAGE_TABLE_SIZE; ++index) {
+            auto cell = stageCellRect(index);
+            auto* nameLabel = makeLabel(stageName(index), false, 0.58f, softTextColor());
+            float natural = nameLabel->getContentSize().width * nameLabel->getScale();
+            if (natural > cell.size.width - 8.f && natural > 0.f) {
+                nameLabel->setScale(nameLabel->getScale() * (cell.size.width - 8.f) / natural);
+            }
+            nameLabel->setPosition(CCPoint(cell.getMidX(), STAGE_LABEL_Y));
+            m_deck->addChild(nameLabel, 3);
+            m_stageNameLabels[index] = nameLabel;
+        }
+
+        if (auto* allLabel = makeLabel("all modes", false, 0.74f, softTextColor())) {
+            allLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+            allLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_TIMING_ALL_Y));
+            m_deck->addChild(allLabel, 3);
+            m_stageTimingLabels[0] = allLabel;
+        }
+        if (auto* waveLabel = makeLabel("wave", false, 0.74f, softTextColor())) {
+            waveLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+            waveLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_TIMING_WAVE_Y));
+            m_deck->addChild(waveLabel, 3);
+            m_stageTimingLabels[1] = waveLabel;
+        }
+        if (auto* hint = makeLabel("tap a stage above to apply it", false, 0.60f, faintTextColor())) {
+            hint->setAnchorPoint(CCPoint(0.f, 0.5f));
+            hint->setPosition(CCPoint(LOG_X + 22.f, STAGE_HINT_Y));
+            m_deck->addChild(hint, 3);
+            m_stageTimingLabels[2] = hint;
+        }
+
+        // ---- settings pane ----------------------------------------------------
+        m_settingsHeaderLabel = makeLabel("appearance", true, 0.62f, logTextColor());
+        m_settingsHeaderLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_settingsHeaderLabel->setPosition(CCPoint(LOG_X + 22.f, LOG_HEADER_Y));
+        m_deck->addChild(m_settingsHeaderLabel, 3);
+
+        m_settingsBar = makeDrawNode();
+        m_deck->addChild(m_settingsBar, 1);
+        for (int row = 0; row < 2; ++row) {
+            drawCurvedRect(
+                m_settingsBar,
+                settingsRowRect(row),
+                12.f,
+                color4(255, 255, 255, 8),
+                color4(255, 255, 255, 22),
+                1.f
+            );
+        }
+
+        m_themeSwatches = makeDrawNode();
+        m_deck->addChild(m_themeSwatches, 1);
+        ccColor3B currentPrimary = getUIPrimaryColor();
+        for (int index = 0; index < THEME_COUNT; ++index) {
+            auto rect = swatchRect(index);
+            ccColor3B themePrimary = hexColor(THEMES[index].primary);
+            ccColor3B themeSurface = hexColor(THEMES[index].surface);
+            ccColor3B themeText = hexColor(THEMES[index].text);
+            bool selected = themePrimary.r == currentPrimary.r
+                && themePrimary.g == currentPrimary.g
+                && themePrimary.b == currentPrimary.b;
+            drawCurvedRect(
+                m_themeSwatches,
+                rect,
+                11.f,
+                color4(themeSurface, 255),
+                selected ? color4(accentColor(), 235) : color4(255, 255, 255, 34),
+                selected ? 2.f : 1.f
+            );
+            m_themeSwatches->drawCircle(
+                CCPoint(rect.getMinX() + 17.f, rect.getMidY()),
+                6.f,
+                color4(themePrimary, 255),
+                0.f,
+                color4(0, 0, 0, 0),
+                22
+            );
+            if (auto* swatchLabel = makeLabel(THEMES[index].name, false, 0.48f, themeText)) {
+                swatchLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+                swatchLabel->setPosition(CCPoint(rect.getMinX() + 29.f, rect.getMidY()));
+                m_deck->addChild(swatchLabel, 3);
+                m_settingsThemeLabels[index] = swatchLabel;
+            }
+        }
+
+        char const* settingsNames[2] = { "glow", "terminal" };
+        for (int row = 0; row < 2; ++row) {
+            auto rect = settingsRowRect(row);
+            if (auto* name = makeLabel(settingsNames[row], false, 0.72f, softTextColor())) {
+                name->setAnchorPoint(CCPoint(0.f, 0.5f));
+                name->setPosition(CCPoint(rect.getMinX() + 18.f, rect.getMidY()));
+                m_deck->addChild(name, 3);
+                m_settingsValueLabels[row] = name;
+            }
+        }
+
+        m_modeIconContainer = CCNode::create();
+        m_modeIconContainer->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_modeIconContainer->setPosition(CCPoint(MODE_ICON_X, MODE_ICON_Y));
+        m_modeIconContainer->setContentSize(CCSize(MODE_ICON_STEP * static_cast<float>(MODE_ICON_COUNT), MODE_ICON_SIZE));
+        m_deck->addChild(m_modeIconContainer, 3);
+
+        m_importButton = makeDeckButton(m_deck, configButtonRect(0), "import", false, false, 0.58f);
+        m_exportButton = makeDeckButton(m_deck, configButtonRect(1), "export", false, false, 0.58f);
+
+        m_configStatusLabel = makeLabel("", false, 0.54f, faintTextColor());
+        m_configStatusLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+        m_configStatusLabel->setPosition(CCPoint(configButtonRect(1).getMaxX() + 14.f, CONFIG_BUTTON_Y));
+        m_deck->addChild(m_configStatusLabel, 3);
+
+        updateModeIcons();
+
+        applyTab();
+    }
+
+    void AfterflowOverlay::rebuildDeck() {
+        if (!m_deck) {
+            return;
+        }
+        m_pressedTarget = HitTarget::None;
+        m_pressedNode = nullptr;
+        m_deck->removeAllChildrenWithCleanup(true);
+        buildDeck();
+        layout();
+        refresh();
+        if (m_isOpen) {
+            m_deck->setVisible(true);
+        }
+    }
+
+    void AfterflowOverlay::layout() {
+        auto winSize = CCDirector::get()->getWinSize();
+        setContentSize(winSize);
+        if (m_scrim) {
+            m_scrim->changeWidthAndHeight(winSize.width, winSize.height);
+        }
+
+        auto safeArea = geode::utils::getSafeAreaRect();
+        if (safeArea.size.width <= 1.f || safeArea.size.height <= 1.f) {
+            safeArea = CCRect(0.f, 0.f, winSize.width, winSize.height);
+        }
+        m_safeArea = safeArea;
+
+        float fitScale = std::min(0.86f * safeArea.size.width / DECK_WIDTH, 0.86f * safeArea.size.height / DECK_HEIGHT);
+        float comfortableScale = std::min(fitScale, 0.94f);
+        m_deckScale = std::min(std::max(comfortableScale * getUIPanelScale(), 0.2f), fitScale);
+        m_deck->setScale(m_deckScale);
+        m_deck->setPosition(CCPoint(safeArea.getMidX(), safeArea.getMidY()));
+
+        double savedX = Mod::get()->getSavedValue<double>("ui-button-x", -1.0);
+        double savedY = Mod::get()->getSavedValue<double>("ui-button-y", -1.0);
+        if (savedX >= 0.0 && savedX <= 1.0 && savedY >= 0.0 && savedY <= 1.0) {
+            m_launcherPosition = CCPoint(
+                safeArea.getMinX() + static_cast<float>(savedX) * safeArea.size.width,
+                safeArea.getMinY() + static_cast<float>(savedY) * safeArea.size.height
+            );
+        }
+        else {
+            m_launcherPosition = defaultLauncherPosition();
+        }
+        m_launcherPosition = clampLauncherPosition(m_launcherPosition);
+        m_launcher->setPosition(m_launcherPosition);
+    }
+
+    CCPoint AfterflowOverlay::defaultLauncherPosition() const {
+        return CCPoint(m_safeArea.getMaxX() - 44.f, m_safeArea.getMaxY() - 104.f);
+    }
+
+    CCPoint AfterflowOverlay::clampLauncherPosition(CCPoint const& position) const {
+        float margin = 36.f;
+        float minX = m_safeArea.getMinX() + margin;
+        float maxX = m_safeArea.getMaxX() - margin;
+        float minY = m_safeArea.getMinY() + margin;
+        float maxY = m_safeArea.getMaxY() - margin;
+        if (maxX < minX) {
+            minX = maxX = m_safeArea.getMidX();
+        }
+        if (maxY < minY) {
+            minY = maxY = m_safeArea.getMidY();
+        }
+        return CCPoint(std::clamp(position.x, minX, maxX), std::clamp(position.y, minY, maxY));
+    }
+
+    void AfterflowOverlay::saveLauncherPosition() {
+        float width = std::max(1.f, m_safeArea.size.width);
+        float height = std::max(1.f, m_safeArea.size.height);
+        double normalizedX = (m_launcherPosition.x - m_safeArea.getMinX()) / width;
+        double normalizedY = (m_launcherPosition.y - m_safeArea.getMinY()) / height;
+        Mod::get()->setSavedValue("ui-button-x", normalizedX);
+        Mod::get()->setSavedValue("ui-button-y", normalizedY);
+    }
+
+    void AfterflowOverlay::applyTheme(int index) {
+        if (index < 0 || index >= THEME_COUNT) {
+            return;
+        }
+        auto const& theme = THEMES[index];
+        Mod::get()->setSettingValue<ccColor3B>("ui-primary-color", hexColor(theme.primary));
+        Mod::get()->setSettingValue<ccColor3B>("ui-secondary-color", hexColor(theme.secondary));
+        Mod::get()->setSettingValue<ccColor3B>("ui-surface-color", hexColor(theme.surface));
+        Mod::get()->setSettingValue<ccColor3B>("ui-text-color", hexColor(theme.text));
+        rebuildDeck();
+    }
+
+    void AfterflowOverlay::applyChip() {
+        if (!m_chipBar) {
+            return;
+        }
+        m_chipBar->clear();
+        bool values[CHIP_COUNT] = { state.consoleEnabled, state.waveMarginEnabled, state.showPathEnabled };
+        for (int index = 0; index < CHIP_COUNT; ++index) {
+            auto cell = chipRect(index);
+            float dotX = cell.getMinX() + 12.f;
+            float dotY = cell.getMidY();
+            bool isOn = values[index];
+            float radius = 9.f;
+            if (isOn) {
+                drawCurvedRect(m_chipBar, cell, radius, color4(accentColor(), 34), color4(accentColor(), 120), 1.f);
+                m_chipBar->drawCircle(CCPoint(dotX, dotY), 4.f, color4(accentColor(), 255), 0.f, color4(0, 0, 0, 0), 18);
+            }
+            else {
+                drawCurvedRect(m_chipBar, cell, radius, color4(255, 255, 255, 8), color4(255, 255, 255, 26), 1.f);
+                m_chipBar->drawCircle(CCPoint(dotX, dotY), 3.f, color4(255, 255, 255, 70), 0.f, color4(0, 0, 0, 0), 18);
+            }
+            if (m_chipLabels[index]) {
+                m_chipLabels[index]->setColor(isOn ? logTextColor() : softTextColor());
+                m_chipLabels[index]->setOpacity(isOn ? 255 : 190);
+            }
+        }
+    }
+
+    void AfterflowOverlay::applyTab() {
+        if (m_activeTab < 0) { m_activeTab = 0; }
+        if (m_activeTab >= TAB_COUNT) { m_activeTab = TAB_COUNT - 1; }
+
+        if (m_tabBar) {
+            m_tabBar->clear();
+            auto slot = tabSlotRect(m_activeTab);
+            drawCurvedRect(
+                m_tabBar,
+                CCRect(slot.getMinX() + 18.f, TAB_LABEL_Y - 17.f, slot.size.width - 36.f, 34.f),
+                17.f,
+                color4(accentColor(), 26),
+                color4(accentColor(), 74),
+                1.f
+            );
+        }
+
+        for (int index = 0; index < TAB_COUNT; ++index) {
+            if (m_tabLabels[index]) {
+                bool isActive = index == m_activeTab;
+                m_tabLabels[index]->setColor(isActive ? color3(244, 245, 250) : faintTextColor());
+                m_tabLabels[index]->setOpacity(isActive ? 255 : 185);
+            }
+        }
+
+        bool const showLog = m_activeTab == 0;
+        bool const showStage = m_activeTab == 1;
+        bool const showSettings = m_activeTab == 2;
+
+        if (m_activityLabel) { m_activityLabel->setVisible(showLog); }
+        if (m_activityCountLabel) { m_activityCountLabel->setVisible(showLog); }
+        for (int i = 0; i < static_cast<int>(sizeof(m_activityLines) / sizeof(m_activityLines[0])); ++i) {
+            if (m_activityLines[i]) { m_activityLines[i]->setVisible(showLog); }
+        }
+        if (m_logHighlight) { m_logHighlight->setVisible(showLog); }
+        if (m_copyButton) { m_copyButton->setVisible(showLog); }
+
+        if (m_stageNameLabel) { m_stageNameLabel->setVisible(showStage); }
+        if (m_stageIndexLabel) { m_stageIndexLabel->setVisible(showStage); }
+        if (m_stageDescriptionLabel) { m_stageDescriptionLabel->setVisible(showStage); }
+        for (int i = 0; i < static_cast<int>(sizeof(m_stageNameLabels) / sizeof(m_stageNameLabels[0])); ++i) {
+            if (m_stageNameLabels[i]) { m_stageNameLabels[i]->setVisible(showStage); }
+        }
+        for (int i = 0; i < static_cast<int>(sizeof(m_stageTimingLabels) / sizeof(m_stageTimingLabels[0])); ++i) {
+            if (m_stageTimingLabels[i]) { m_stageTimingLabels[i]->setVisible(showStage); }
+        }
+        if (m_stageTrack) { m_stageTrack->setVisible(showStage); }
+        if (m_stageBackButton) { m_stageBackButton->setVisible(false); }
+        if (m_stageForwardButton) { m_stageForwardButton->setVisible(false); }
+
+        if (m_settingsHeaderLabel) { m_settingsHeaderLabel->setVisible(showSettings); }
+        if (m_settingsBar) { m_settingsBar->setVisible(showSettings); }
+        if (m_themeSwatches) { m_themeSwatches->setVisible(showSettings); }
+        if (m_settingsHintLabel) { m_settingsHintLabel->setVisible(showSettings); }
+        if (m_modeIconContainer) { m_modeIconContainer->setVisible(showSettings); }
+        if (m_importButton) { m_importButton->setVisible(showSettings); }
+        if (m_exportButton) { m_exportButton->setVisible(showSettings); }
+        if (m_configStatusLabel) { m_configStatusLabel->setVisible(showSettings); }
+        for (int i = 0; i < 2; ++i) {
+            if (m_settingsValueLabels[i]) { m_settingsValueLabels[i]->setVisible(showSettings); }
+        }
+        for (int i = 0; i < THEME_COUNT; ++i) {
+            if (m_settingsThemeLabels[i]) { m_settingsThemeLabels[i]->setVisible(showSettings); }
+        }
+
+        if (m_terminalButton) { m_terminalButton->setVisible(false); }
+    }
+
+    void AfterflowOverlay::refresh() {
+        if (!m_deck) {
+            return;
+        }
+
+        ccColor3B live = state.isEnabled ? accentColor() : warningColor();
+
+        if (m_stageIndexLabel) {
+            m_stageIndexLabel->setString(fmt::format("{:02}/{:02}", state.stageIndex + 1, STAGE_TABLE_SIZE).c_str());
+            m_stageIndexLabel->setColor(live);
+        }
+        if (m_stageNameLabel) {
+            m_stageNameLabel->setString(stageName(state.stageIndex));
+            m_stageNameLabel->setColor(state.isEnabled ? color3(240, 241, 246) : warningColor());
+        }
+        if (m_stageDescriptionLabel) {
+            auto description = state.isEnabled
+                ? fmt::format("{} ticks all  /  {} ticks wave", state.ticksAllModes, state.ticksWaveMode)
+                : std::string("raw input / stage disabled");
+            m_stageDescriptionLabel->setString(description.c_str());
+            m_stageDescriptionLabel->setColor(state.isEnabled ? softTextColor() : warningColor());
+        }
+
+        if (m_statusLabel) {
+            m_statusLabel->setString(state.isEnabled ? "buffer on" : "buffer off");
+            m_statusLabel->setColor(state.isEnabled ? secondaryColor() : warningColor());
+
+            float labelWidth = m_statusLabel->getContentSize().width * m_statusLabel->getScale();
+            float pillWidth = labelWidth + 36.f;
+            float pillX = DISMISS_X - 16.f - pillWidth;
+            float centerY = HEADER_Y;
+            m_statusLabel->setPosition(CCPoint(pillX + 24.f, centerY));
+
+            if (m_statusBeacon) {
+                m_statusBeacon->clear();
+                drawCurvedRect(
+                    m_statusBeacon,
+                    CCRect(pillX, centerY - STATUS_HEIGHT * 0.5f, pillWidth, STATUS_HEIGHT),
+                    STATUS_HEIGHT * 0.5f,
+                    color4(255, 255, 255, 8),
+                    color4(255, 255, 255, 20),
+                    1.f
+                );
+                m_statusBeacon->drawCircle(CCPoint(pillX + 13.f, centerY), 6.f, color4(live, 34), 0.f, color4(0, 0, 0, 0), 18);
+                m_statusBeacon->drawCircle(CCPoint(pillX + 13.f, centerY), 3.4f, color4(live, 255), 0.f, color4(0, 0, 0, 0), 16);
+            }
+        }
+
+        if (m_stageTrack) {
+            m_stageTrack->clear();
+            drawCurvedRect(
+                m_stageTrack,
+                CCRect(STAGE_TRACK_X, STAGE_TRACK_Y, STAGE_TRACK_WIDTH, STAGE_TRACK_HEIGHT),
+                STAGE_TRACK_HEIGHT * 0.5f,
+                color4(255, 255, 255, 7),
+                color4(255, 255, 255, 14),
+                1.f
+            );
+
+            bool selectedAvailable = STAGE_TABLE[state.stageIndex].isEnabled;
+            ccColor3B selectedTint = selectedAvailable ? accentColor() : warningColor();
+            drawCurvedRect(
+                m_stageTrack,
+                stageCellRect(state.stageIndex),
+                10.f,
+                color4(selectedTint, 48),
+                color4(selectedTint, 150),
+                1.f
+            );
+
+            for (int index = 0; index < STAGE_TABLE_SIZE; ++index) {
+                auto* nameLabel = m_stageNameLabels[index];
+                if (!nameLabel) {
+                    continue;
+                }
+                bool isSelected = index == state.stageIndex;
+                bool isAvailable = STAGE_TABLE[index].isEnabled;
+                nameLabel->setColor(isSelected ? color3(248, 249, 253) : (isAvailable ? softTextColor() : warningColor()));
+                nameLabel->setOpacity(isSelected ? 255 : 205);
+            }
+
+            float barHeight = 10.f;
+            auto drawBar = [&](float y, int ticks, ccColor3B tint) {
+                drawCurvedRect(
+                    m_stageTrack,
+                    CCRect(STAGE_BAR_X, y - barHeight * 0.5f, STAGE_BAR_WIDTH, barHeight),
+                    barHeight * 0.5f,
+                    color4(255, 255, 255, 12),
+                    color4(0, 0, 0, 0),
+                    0.f
+                );
+                float ratio = std::clamp(static_cast<float>(ticks) / 4.f, 0.04f, 1.f);
+                drawCurvedRect(
+                    m_stageTrack,
+                    CCRect(STAGE_BAR_X, y - barHeight * 0.5f, STAGE_BAR_WIDTH * ratio, barHeight),
+                    barHeight * 0.5f,
+                    color4(tint, 225),
+                    color4(0, 0, 0, 0),
+                    0.f
+                );
+            };
+            drawBar(STAGE_TIMING_ALL_Y, state.isEnabled ? state.ticksAllModes : 0, live);
+            drawBar(STAGE_TIMING_WAVE_Y, state.isEnabled ? state.ticksWaveMode : 0, live);
+        }
+
+        if (m_stageTimingLabels[0]) {
+            m_stageTimingLabels[0]->setString(fmt::format("all modes  {}t", state.ticksAllModes).c_str());
+            m_stageTimingLabels[0]->setColor(state.isEnabled ? softTextColor() : warningColor());
+        }
+        if (m_stageTimingLabels[1]) {
+            m_stageTimingLabels[1]->setString(fmt::format("wave  {}t", state.ticksWaveMode).c_str());
+            m_stageTimingLabels[1]->setColor(state.isEnabled ? softTextColor() : warningColor());
+        }
+
+        auto logs = recentLogSnapshot();
+        if (m_activityCountLabel) {
+            m_activityCountLabel->setScale(0.62f * getUIFontScale());
+            auto entryWord = logs.size() == 1 ? "event" : "events";
+            m_activityCountLabel->setString(fmt::format("/ {} {}", logs.size(), entryWord).c_str());
+            float natural = m_activityCountLabel->getContentSize().width * m_activityCountLabel->getScale();
+            float right = m_activityCountLabel->getPositionX() + natural;
+            if (right > COPY_X - 12.f && natural > 0.f) {
+                float available = (COPY_X - 12.f) - m_activityCountLabel->getPositionX();
+                if (available > 8.f) {
+                    m_activityCountLabel->setScale(m_activityCountLabel->getScale() * available / natural);
+                }
+            }
+        }
+
+        if (m_logHighlight) {
+            m_logHighlight->clear();
+            if (!logs.empty()) {
+                float latestY = LOG_LINE_START_Y - static_cast<float>(LOG_LINE_COUNT - 1) * LOG_LINE_STEP;
+                drawCurvedRect(
+                    m_logHighlight,
+                    CCRect(LOG_X + 8.f, latestY - 10.f, LOG_WIDTH - 16.f, 20.f),
+                    6.f,
+                    color4(accentColor(), 16),
+                    color4(0, 0, 0, 0),
+                    0.f
+                );
+            }
+        }
+
+        size_t visibleCount = std::min<size_t>(logs.size(), LOG_LINE_COUNT);
+        size_t firstVisible = logs.size() - visibleCount;
+        int lineOffset = LOG_LINE_COUNT - static_cast<int>(visibleCount);
+        for (int index = 0; index < LOG_LINE_COUNT; ++index) {
+            auto* line = m_activityLines[index];
+            if (!line) {
+                continue;
+            }
+            bool hasLine = index >= lineOffset;
+            if (hasLine) {
+                size_t logIndex = firstVisible + static_cast<size_t>(index - lineOffset);
+                bool isLatest = index == LOG_LINE_COUNT - 1;
+                auto text = singleLineLog(logs[logIndex]);
+                text = (isLatest ? "> " : "  ") + text;
+                fitLogLine(line, text, LOG_WIDTH - 130.f);
+                bool lowPriority = text.find("host os") != std::string::npos
+                    || text.find("loader") != std::string::npos
+                    || text.find("version check") != std::string::npos;
+                float baseScale = 0.96f * getUIFontScale();
+                line->setScale(isLatest ? baseScale : (lowPriority ? baseScale * 0.88f : baseScale * 0.97f));
+                line->setColor(isLatest ? secondaryColor() : logTextColor());
+                line->setOpacity(isLatest ? 255 : (lowPriority ? 150 : 232));
+            }
+            else {
+                line->setString("");
+            }
+        }
+        if (logs.empty() && m_activityLines[0]) {
+            auto* line = m_activityLines[0];
+            fitLogLine(line, "> no activity yet / inputs will appear here", LOG_WIDTH - 130.f);
+            line->setColor(faintTextColor());
+        }
+
+        if (m_settingsValueLabels[0]) {
+            bool glowOn = getUIGlow();
+            m_settingsValueLabels[0]->setString(glowOn ? "glow  on" : "glow  off");
+            m_settingsValueLabels[0]->setColor(glowOn ? logTextColor() : faintTextColor());
+        }
+        if (m_settingsValueLabels[1]) {
+            bool terminalOn = isTerminalEnabled();
+            m_settingsValueLabels[1]->setString(terminalOn ? "terminal  on" : "terminal  off");
+            m_settingsValueLabels[1]->setColor(terminalOn ? logTextColor() : faintTextColor());
+        }
+
+        int activeMode = -1;
+        if (auto* manager = GameManager::get()) {
+            if (auto* playLayer = manager->m_playLayer) {
+                if (auto* player = playLayer->m_player1) {
+                    if (player->m_isShip) { activeMode = 1; }
+                    else if (player->m_isBall) { activeMode = 2; }
+                    else if (player->m_isBird) { activeMode = 3; }
+                    else if (player->m_isDart) { activeMode = 4; }
+                    else if (player->m_isRobot) { activeMode = 5; }
+                    else if (player->m_isSpider) { activeMode = 6; }
+                    else if (player->m_isSwing) { activeMode = 7; }
+                    else { activeMode = 0; }
+                }
+            }
+        }
+        for (int index = 0; index < MODE_ICON_COUNT; ++index) {
+            auto* icon = m_modeIcons[index];
+            if (!icon) {
+                continue;
+            }
+            bool isActive = index == activeMode;
+            float baseScale = MODE_ICON_SIZE / 40.f;
+            // active: full size + full opacity, inactive: 80% size + dimmed,
+            // and a neutral mid-state when the player is not inside a level.
+            float targetScale = (activeMode < 0) ? baseScale : (isActive ? baseScale : baseScale * 0.8f);
+            int targetOpacity = (activeMode < 0) ? 150 : (isActive ? 255 : 100);
+            icon->setScale(targetScale);
+            icon->setOpacity(targetOpacity);
+        }
+
+        updateHints();
+    }
+
+    void AfterflowOverlay::updateHints() {
+        if (m_stageHintKeyLabel) { m_stageHintKeyLabel->setVisible(false); }
+        if (m_stageHintLabel) { m_stageHintLabel->setVisible(false); }
+        if (m_panelHintKeyLabel) { m_panelHintKeyLabel->setVisible(false); }
+        if (m_panelHintLabel) { m_panelHintLabel->setVisible(false); }
+    }
+    void AfterflowOverlay::tickRefresh(float) {
+        if (m_isOpen) {
+            refresh();
+        }
+    }
+
+    void AfterflowOverlay::openPanel() {
+        if (m_isOpen) {
+            return;
+        }
+        m_isOpen = true;
+        if (!isMobileHost()) {
+            setTouchEnabled(true);
+        }
+        if (m_launcher) {
+            m_launcher->setVisible(false);
+        }
+        pauseForPanel();
+        layout();
+        refresh();
+        schedule(schedule_selector(AfterflowOverlay::tickRefresh), 0.2f);
+
+        m_scrim->stopAllActions();
+        m_scrim->setVisible(true);
+        m_scrim->setOpacity(0);
+        m_scrim->runAction(CCFadeTo::create(0.16f, 150));
+
+        m_deck->stopAllActions();
+        m_deck->setVisible(true);
+        m_deck->setScale(m_deckScale * 0.96f);
+        m_deck->runAction(CCEaseOut::create(CCScaleTo::create(0.22f, m_deckScale), 2.f));
+    }
+
+    void AfterflowOverlay::closePanel() {
+        if (!m_isOpen) {
+            return;
+        }
+        m_isOpen = false;
+        unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
+
+        m_deck->stopAllActions();
+        m_deck->runAction(CCSequence::create(
+            CCEaseIn::create(CCScaleTo::create(0.12f, m_deckScale * 0.96f), 1.5f),
+            CallFuncExt::create([this] {
+                if (!m_isOpen && m_deck) {
+                    m_deck->setVisible(false);
+                }
+            }),
+            nullptr
+        ));
+
+        m_scrim->stopAllActions();
+        m_scrim->runAction(CCSequence::create(
+            CCFadeTo::create(0.12f, 0),
+            CallFuncExt::create([this] {
+                if (!m_isOpen && m_scrim) {
+                    m_scrim->setVisible(false);
+                }
+            }),
+            nullptr
+        ));
+
+        resumeFromPanel();
+
+        if (isMobileHost()) {
+            if (m_launcher) {
+                m_launcher->setVisible(true);
+                m_launcher->setScale(1.f);
+            }
+        }
+        else {
+            runAction(CCSequence::create(
+                CCDelayTime::create(0.16f),
+                CallFuncExt::create([this] {
+                    if (!m_isOpen && !isMobileHost()) {
+                        setTouchEnabled(false);
+                    }
+                }),
+                nullptr
+            ));
+        }
+    }
+
+    void AfterflowOverlay::togglePanel() {
+        if (m_isOpen) {
+            closePanel();
+        }
+        else {
+            openPanel();
+        }
+    }
+
+    void AfterflowOverlay::onEnter() {
+        CCLayer::onEnter();
+        layout();
+        refresh();
+        if (m_deck && !m_isOpen) {
+            m_deck->setVisible(false);
+        }
+        if (m_scrim && !m_isOpen) {
+            m_scrim->setVisible(false);
+        }
+        if (m_launcher) {
+            m_launcher->setVisible(isMobileHost() && !m_isOpen);
+        }
+    }
+
+    void AfterflowOverlay::onExit() {
+        m_isOpen = false;
+        m_didPauseForPanel = false;
+        m_isDraggingLauncher = false;
+        m_pressedTarget = HitTarget::None;
+        m_pressedNode = nullptr;
+        unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
+        CCLayer::onExit();
+    }
+
+    void AfterflowOverlay::registerWithTouchDispatcher() {
+        CCDirector::get()->getTouchDispatcher()->addTargetedDelegate(this, -1000, true);
+    }
+
+    bool AfterflowOverlay::ccTouchBegan(CCTouch* touch, CCEvent*) {
+        if (!touch) {
+            return false;
+        }
+        if (m_isOpen) {
+            CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            if (!CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT).containsPoint(deckPoint)) {
+                m_pressedTarget = HitTarget::Outside;
+                m_pressedStageSlot = -1;
+                return true;
+            }
+            int stageSlot = -1;
+            m_pressedTarget = hitTest(deckPoint, &stageSlot);
+            m_pressedStageSlot = stageSlot;
+            if (m_pressedTarget != HitTarget::None) {
+                pressTarget(m_pressedTarget);
+            }
+            return true;
+        }
+
+        if (isMobileHost() && m_launcher && m_launcher->isVisible()) {
+            CCPoint local = convertTouchToNodeSpace(touch);
+            float deltaX = local.x - m_launcherPosition.x;
+            float deltaY = local.y - m_launcherPosition.y;
+            if (deltaX * deltaX + deltaY * deltaY <= 38.f * 38.f) {
+                m_isDraggingLauncher = true;
+                m_launcherMoved = false;
+                m_launcherDragStart = local;
+                m_launcherDragOffset = CCPoint(m_launcherPosition.x - local.x, m_launcherPosition.y - local.y);
+                m_launcher->stopAllActions();
+                m_launcher->setScale(1.08f);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void AfterflowOverlay::ccTouchMoved(CCTouch* touch, CCEvent*) {
+        if (!touch) {
+            return;
+        }
+        if (m_isDraggingLauncher) {
+            CCPoint local = convertTouchToNodeSpace(touch);
+            float deltaX = local.x - m_launcherDragStart.x;
+            float deltaY = local.y - m_launcherDragStart.y;
+            if (deltaX * deltaX + deltaY * deltaY > 64.f) {
+                m_launcherMoved = true;
+            }
+            m_launcherPosition = clampLauncherPosition(CCPoint(local.x + m_launcherDragOffset.x, local.y + m_launcherDragOffset.y));
+            m_launcher->setPosition(m_launcherPosition);
+            return;
+        }
+
+        if (m_isOpen && m_pressedTarget != HitTarget::None) {
+            CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            int stageSlot = -1;
+            HitTarget target = hitTest(deckPoint, &stageSlot);
+            if (target != m_pressedTarget || (target == HitTarget::StageSlot && stageSlot != m_pressedStageSlot)) {
+                restorePressed();
+                m_pressedTarget = HitTarget::None;
+            }
+        }
+    }
+
+    void AfterflowOverlay::ccTouchEnded(CCTouch* touch, CCEvent*) {
+        if (!touch) {
+            return;
+        }
+        if (m_isDraggingLauncher) {
+            m_isDraggingLauncher = false;
+            if (m_launcher) {
+                m_launcher->setScale(1.f);
+            }
+            if (m_launcherMoved) {
+                saveLauncherPosition();
+            }
+            else {
+                openPanel();
+            }
+            return;
+        }
+
+        if (!m_isOpen) {
+            restorePressed();
+            m_pressedTarget = HitTarget::None;
+            return;
+        }
+
+        HitTarget target = m_pressedTarget;
+        m_pressedTarget = HitTarget::None;
+        if (target == HitTarget::Outside) {
+            restorePressed();
+            closePanel();
+            return;
+        }
+        if (target != HitTarget::None) {
+            CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            int stageSlot = -1;
+            HitTarget released = hitTest(deckPoint, &stageSlot);
+            bool isSameTarget = released == target && (target != HitTarget::StageSlot || stageSlot == m_pressedStageSlot);
+            restorePressed();
+            if (isSameTarget) {
+                performTarget(target);
+            }
+            return;
+        }
+        restorePressed();
+    }
+
+    void AfterflowOverlay::ccTouchCancelled(CCTouch*, CCEvent*) {
+        if (m_isDraggingLauncher) {
+            m_isDraggingLauncher = false;
+            if (m_launcher) {
+                m_launcher->setScale(1.f);
+            }
+            if (m_launcherMoved) {
+                saveLauncherPosition();
+            }
+        }
+        restorePressed();
+        m_pressedTarget = HitTarget::None;
+    }
+
+    AfterflowOverlay::HitTarget AfterflowOverlay::hitTest(CCPoint const& point, int* stageSlot) const {
+        for (int tabIndex = 0; tabIndex < TAB_COUNT; ++tabIndex) {
+            if (tabSlotRect(tabIndex).containsPoint(point)) {
+                if (stageSlot) { *stageSlot = tabIndex; }
+                return HitTarget::Tab;
+            }
+        }
+        if (m_activeTab == 2) {
+            for (int index = 0; index < THEME_COUNT; ++index) {
+                if (swatchRect(index).containsPoint(point)) {
+                    if (stageSlot) { *stageSlot = index; }
+                    return HitTarget::Theme;
+                }
+            }
+            for (int row = 0; row < 2; ++row) {
+                if (settingsRowRect(row).containsPoint(point)) {
+                    if (stageSlot) { *stageSlot = row; }
+                    return HitTarget::SettingsRow;
+                }
+            }
+        }
+        if (m_activeTab == 2) {
+            if (configButtonRect(0).containsPoint(point)) {
+                if (stageSlot) { *stageSlot = 0; }
+                return HitTarget::ImportConfig;
+            }
+            if (configButtonRect(1).containsPoint(point)) {
+                if (stageSlot) { *stageSlot = 1; }
+                return HitTarget::ExportConfig;
+            }
+        }
+        if (CCRect(DISMISS_X, DISMISS_Y, DISMISS_WIDTH, DISMISS_HEIGHT).containsPoint(point)) {
+            return HitTarget::Dismiss;
+        }
+        if (m_activeTab == 0 && CCRect(COPY_X, COPY_Y, COPY_WIDTH, COPY_HEIGHT).containsPoint(point)) {
+            return HitTarget::CopyLog;
+        }
+        if (m_activeTab == 1) {
+            for (int index = 0; index < STAGE_TABLE_SIZE; ++index) {
+                if (stageSlotRect(index).containsPoint(point)) {
+                    if (stageSlot) {
+                        *stageSlot = index;
+                    }
+                    return HitTarget::StageSlot;
+                }
+            }
+        }
+        return HitTarget::None;
+    }
+
+    CCNode* AfterflowOverlay::nodeForTarget(HitTarget target) const {
+        switch (target) {
+            case HitTarget::Dismiss: return m_dismissButton;
+            case HitTarget::StageBack: return m_stageBackButton;
+            case HitTarget::StageForward: return m_stageForwardButton;
+            case HitTarget::CopyLog: return m_copyButton;
+            case HitTarget::Terminal: return m_terminalButton;
+            default: return nullptr;
+        }
+    }
+
+    void AfterflowOverlay::pressTarget(HitTarget target) {
+        m_pressedNode = nodeForTarget(target);
+        if (m_pressedNode) {
+            m_pressedNode->stopAllActions();
+            m_pressedNode->runAction(CCEaseOut::create(CCScaleTo::create(0.06f, 0.93f), 2.f));
+        }
+    }
+
+    void AfterflowOverlay::restorePressed() {
+        if (m_pressedNode) {
+            m_pressedNode->stopAllActions();
+            m_pressedNode->runAction(CCEaseBackOut::create(CCScaleTo::create(0.12f, 1.f)));
+            m_pressedNode = nullptr;
+        }
+    }
+
+    void AfterflowOverlay::performTarget(HitTarget target) {
+        if (target == HitTarget::Tab) {
+            if (m_pressedStageSlot >= 0 && m_pressedStageSlot < TAB_COUNT) {
+                m_activeTab = m_pressedStageSlot;
+                applyTab();
+                refresh();
+            }
+            return;
+        }
+
+        if (target == HitTarget::Theme) {
+            if (m_pressedStageSlot >= 0 && m_pressedStageSlot < THEME_COUNT) {
+                applyTheme(m_pressedStageSlot);
+            }
+            return;
+        }
+
+        if (target == HitTarget::ImportConfig) {
+            importConfig();
+            return;
+        }
+
+        if (target == HitTarget::ExportConfig) {
+            exportConfig();
+            return;
+        }
+
+        if (target == HitTarget::SettingsRow) {
+            if (m_pressedStageSlot == 0) {
+                Mod::get()->setSettingValue<bool>("ui-glow", !getUIGlow());
+            }
+            else if (m_pressedStageSlot == 1) {
+                Mod::get()->setSettingValue<bool>("terminal-enabled", !isTerminalEnabled());
+            }
+            rebuildDeck();
+            return;
+        }
+
+        switch (target) {
+            case HitTarget::Dismiss:
+                closePanel();
+                break;
+            case HitTarget::CopyLog:
+                copyLog();
+                break;
+            case HitTarget::Terminal:
+                toggleTerminal();
+                closePanel();
+                break;
+            case HitTarget::StageSlot:
+                setStageIndex(m_pressedStageSlot);
+                break;
+            default:
+                break;
+        }
+    }
+
+    void AfterflowOverlay::setConfigStatus(std::string const& text, bool ok) {
+        if (!m_configStatusLabel) {
+            return;
+        }
+        m_configStatusLabel->stopAllActions();
+        m_configStatusLabel->setString(text.c_str());
+        m_configStatusLabel->setColor(ok ? accentColor() : warningColor());
+        m_configStatusLabel->setOpacity(255);
+        m_configStatusLabel->runAction(CCSequence::create(
+            CCDelayTime::create(2.0f),
+            CallFuncExt::create([this] {
+                if (m_configStatusLabel) {
+                    m_configStatusLabel->setString("");
+                }
+            }),
+            nullptr
+        ));
+    }
+
+    void AfterflowOverlay::exportConfig() {
+        std::string text = fmt::format(
+            "{{\"groundHorizonTicks\":{},\"waveHorizonTicks\":{},\"spamGapTicks\":{},"
+            "\"autoReleaseWindowTicks\":{},\"orbWindowTicks\":{},\"shipMaxDelayTicks\":{},"
+            "\"shipSpamGapTicks\":{},\"robotHoldTicks\":{}}}",
+            state.groundHorizonTicks,
+            state.waveHorizonTicks,
+            state.spamGapTicks,
+            state.autoReleaseWindowTicks,
+            state.orbWindowTicks,
+            state.shipMaxDelayTicks,
+            state.shipSpamGapTicks,
+            robotHoldHistory.pick(20, 50)
+        );
+        bool ok = geode::utils::clipboard::write(text.c_str());
+        setConfigStatus(ok ? "exported to clipboard" : "export failed", ok);
+    }
+
+    void AfterflowOverlay::importConfig() {
+        std::string text = geode::utils::clipboard::read();
+        if (text.empty()) {
+            setConfigStatus("clipboard is empty", false);
+            return;
+        }
+        if (text.find('{') == std::string::npos) {
+            setConfigStatus("clipboard is not a config", false);
+            return;
+        }
+
+        int value = 0;
+        int applied = 0;
+        if (jsonInt(text, "groundHorizonTicks", value)) {
+            state.groundHorizonTicks = std::clamp(value, 48, 240);
+            ++applied;
+        }
+        if (jsonInt(text, "waveHorizonTicks", value)) {
+            state.waveHorizonTicks = std::clamp(value, 20, 160);
+            ++applied;
+        }
+        if (jsonInt(text, "spamGapTicks", value)) {
+            state.spamGapTicks = std::clamp(value, 4, 40);
+            ++applied;
+        }
+        if (jsonInt(text, "autoReleaseWindowTicks", value)) {
+            state.autoReleaseWindowTicks = std::clamp(value, 1, 32);
+            ++applied;
+        }
+        if (jsonInt(text, "orbWindowTicks", value)) {
+            state.orbWindowTicks = std::clamp(value, 1, 64);
+            ++applied;
+        }
+        if (jsonInt(text, "shipMaxDelayTicks", value)) {
+            state.shipMaxDelayTicks = std::clamp(value, 0, 16);
+            ++applied;
+        }
+        if (jsonInt(text, "shipSpamGapTicks", value)) {
+            state.shipSpamGapTicks = std::clamp(value, 2, 40);
+            ++applied;
+        }
+        if (jsonInt(text, "robotHoldTicks", value)) {
+            robotHoldHistory.add(std::clamp(value, 1, 200));
+            ++applied;
+        }
+
+        if (applied == 0) {
+            setConfigStatus("no known keys found", false);
+            return;
+        }
+
+        setConfigStatus(fmt::format("imported {} values", applied), true);
+        refresh();
+    }
+
+    void AfterflowOverlay::updateModeIcons() {
+        if (!m_modeIconContainer) {
+            return;
+        }
+        m_modeIconContainer->removeAllChildrenWithCleanup(true);
+        for (int index = 0; index < MODE_ICON_COUNT; ++index) {
+            m_modeIcons[index] = nullptr;
+        }
+
+        // the row backdrop is a child of the container, so rebuilding the
+        // icons has to put it back as well
+        if (auto* iconBack = makeDrawNode()) {
+            drawCurvedRect(
+                iconBack,
+                CCRect(
+                    -10.f,
+                    -MODE_ICON_SIZE * 0.5f - 6.f,
+                    MODE_ICON_STEP * static_cast<float>(MODE_ICON_COUNT) + 20.f,
+                    MODE_ICON_SIZE + 12.f
+                ),
+                10.f,
+                color4(255, 255, 255, 12),
+                color4(255, 255, 255, 34),
+                1.f
+            );
+            m_modeIconContainer->addChild(iconBack, -1);
+        }
+
+        auto* manager = GameManager::get();
+        if (!manager) {
+            return;
+        }
+
+        int const frames[MODE_ICON_COUNT] = {
+            manager->getPlayerFrame(),
+            manager->getPlayerShip(),
+            manager->getPlayerBall(),
+            manager->getPlayerBird(),
+            manager->getPlayerDart(),
+            manager->getPlayerRobot(),
+            manager->getPlayerSpider(),
+            manager->getPlayerSwing(),
+        };
+        IconType const types[MODE_ICON_COUNT] = {
+            IconType::Cube, IconType::Ship, IconType::Ball, IconType::Ufo,
+            IconType::Wave, IconType::Robot, IconType::Spider, IconType::Swing,
+        };
+        ccColor3B primary = manager->colorForIdx(manager->getPlayerColor());
+        ccColor3B secondary = manager->colorForIdx(manager->getPlayerColor2());
+
+        float baseScale = MODE_ICON_SIZE / 40.f;
+        for (int index = 0; index < MODE_ICON_COUNT; ++index) {
+            auto* icon = SimplePlayer::create(1);
+            if (!icon) {
+                continue;
+            }
+            icon->updatePlayerFrame(frames[index], types[index]);
+            icon->setColors(primary, secondary);
+            icon->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            icon->setScale(baseScale);
+            icon->setOpacity(110);
+            icon->setPosition(CCPoint(MODE_ICON_STEP * (static_cast<float>(index) + 0.5f), 0.f));
+            m_modeIconContainer->addChild(icon);
+            m_modeIcons[index] = icon;
+        }
+    }
+
+    void AfterflowOverlay::copyLog() {
+        auto logs = recentLogSnapshot();
+        std::string text;
+        for (auto const& line : logs) {
+            text += line;
+            text += '\n';
+        }
+        if (text.empty()) {
+            text = "no afterflow activity yet\n";
+        }
+        bool didCopy = geode::utils::clipboard::write(text.c_str());
+        if (m_copyLabel) {
+            m_copyLabel->stopAllActions();
+            m_copyLabel->setString(didCopy ? "copied" : "failed");
+            m_copyLabel->runAction(CCSequence::create(
+                CCDelayTime::create(1.2f),
+                CallFuncExt::create([this] {
+                    if (m_copyLabel) {
+                        m_copyLabel->setString("copy");
+                    }
+                }),
+                nullptr
+            ));
+        }
+    }
+
+    void AfterflowOverlay::pauseForPanel() {
+        m_didPauseForPanel = false;
+        auto* gameLayer = GameManager::get()->m_playLayer;
+        if (!gameLayer || gameLayer->m_isPaused) {
+            return;
+        }
+        m_didPauseForPanel = true;
+        gameLayer->pauseGame(false);
+        removePauseLayers();
+        runAction(CCSequence::create(
+            CCDelayTime::create(0.12f),
+            CallFuncExt::create([this] {
+                if (m_isOpen) {
+                    removePauseLayers();
+                }
+            }),
+            nullptr
+        ));
+    }
+
+    void AfterflowOverlay::resumeFromPanel() {
+        if (!m_didPauseForPanel) {
+            return;
+        }
+        m_didPauseForPanel = false;
+        removePauseLayers();
+        auto* gameLayer = GameManager::get()->m_playLayer;
+        if (gameLayer && gameLayer->m_isPaused) {
+            gameLayer->resume();
+        }
+    }
+
+    void AfterflowOverlay::removePauseLayers() {
+        auto* scene = CCScene::get();
+        if (!scene) {
+            return;
+        }
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            auto* pauseLayer = findDescendant<PauseLayer>(scene);
+            if (!pauseLayer) {
+                break;
+            }
+            pauseLayer->removeFromParentAndCleanup(true);
+        }
+    }
+
+    AfterflowOverlay* activeAfterflowOverlay() {
+        auto* scene = CCScene::get();
+        if (!scene) {
+            return nullptr;
+        }
+        return scene->getChildByType<AfterflowOverlay>(0);
+    }
+
+    void refreshAfterflowOverlay() {
+        if (auto* overlay = activeAfterflowOverlay()) {
+            overlay->refresh();
+        }
+    }
+
+    void attachAfterflowOverlay(CCScene* scene) {
+        if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
+            return;
+        }
+        auto* overlay = AfterflowOverlay::create();
+        if (!overlay) {
+            return;
+        }
+        overlay->setZOrder(9999);
+        scene->addChild(overlay);
+    }
+
+    void ensureAfterflowOverlay() {
+        attachAfterflowOverlay(CCScene::get());
+    }
+
+    void scheduleAfterflowOverlay(CCNode* host) {
+        if (!host) {
+            return;
+        }
+        host->runAction(CCSequence::create(
+            CCDelayTime::create(0.15f),
+            CallFuncExt::create([] {
+                ensureAfterflowOverlay();
+            }),
+            nullptr
+        ));
+    }
+
+    void toggleAfterflowPanel() {
+        auto* scene = CCScene::get();
+        if (!scene) {
+            return;
+        }
+        auto* overlay = scene->getChildByType<AfterflowOverlay>(0);
+        if (!overlay) {
+            ensureAfterflowOverlay();
+            overlay = scene->getChildByType<AfterflowOverlay>(0);
+        }
+        if (overlay) {
+            overlay->togglePanel();
+        }
     }
 
     void dropGhosts() {
@@ -3093,16 +5475,29 @@ finally {
         return true;
     }
 
-    void cycleStage(int stageDirection = 1) {
-        state.stageIndex = (state.stageIndex + stageDirection + STAGE_TABLE_SIZE) % STAGE_TABLE_SIZE;
-          Mod::get()->setSavedValue("stage", state.stageIndex);
+    void setStageIndex(int stageIndex) {
+        int nextIndex = (stageIndex % STAGE_TABLE_SIZE + STAGE_TABLE_SIZE) % STAGE_TABLE_SIZE;
+        bool didChange = nextIndex != state.stageIndex;
+        state.stageIndex = nextIndex;
+        Mod::get()->setSavedValue("stage", state.stageIndex);
         resetPending();
         auto* gameLayer = GameManager::get()->m_playLayer;
         if (gameLayer && !state.wasAutoReleased && state.hasAppliedInput != state.hasRealInput) {
             sendButton(gameLayer, state.hasRealInput);
         }
         applyStage();
-        say("{} cycle -> {}", stageKey(), stageBanner());
+        refreshAfterflowOverlay();
+        if (didChange) {
+            say("stage set -> {}", stageBanner());
+        }
+    }
+
+    void cycleStage(int stageDirection = 1) {
+        int previousIndex = state.stageIndex;
+        setStageIndex(previousIndex + stageDirection);
+        if (state.stageIndex != previousIndex) {
+            say("{} cycle -> {}", stageKey(), stageBanner());
+        }
     }
 
     void startCycleWatcher() {
@@ -3187,17 +5582,52 @@ $on_mod(Loaded) {
     applyStage();
     removeLegacyTerminalLogs();
     resetTerminalLog();
-    startCycleWatcher();
+    if (!isMobileHost()) {
+        startCycleWatcher();
+    }
     setupKeybinds();
+    static auto sceneListener = SceneEvent().listen([](CCScene* scene) {
+        attachAfterflowOverlay(scene);
+    });
+    (void)sceneListener;
     listenForSettingChanges<bool>("terminal-enabled", [](bool enabled) {
         writeTerminalFlags();
         if (!enabled) {
             closeTerminal();
         }
     });
+    static auto primaryColorListener = listenForSettingChanges<ccColor3B>("ui-primary-color", [](ccColor3B) {
+        if (auto* overlay = activeAfterflowOverlay()) {
+            overlay->rebuildDeck();
+        }
+    });
+    static auto secondaryColorListener = listenForSettingChanges<ccColor3B>("ui-secondary-color", [](ccColor3B) {
+        if (auto* overlay = activeAfterflowOverlay()) {
+            overlay->rebuildDeck();
+        }
+    });
+    static auto panelScaleListener = listenForSettingChanges<double>("ui-panel-scale", [](double) {
+        if (auto* overlay = activeAfterflowOverlay()) {
+            overlay->rebuildDeck();
+        }
+    });
+    static auto fontScaleListener = listenForSettingChanges<double>("ui-font-scale", [](double) {
+        if (auto* overlay = activeAfterflowOverlay()) {
+            overlay->rebuildDeck();
+        }
+    });
+    (void)primaryColorListener;
+    (void)secondaryColorListener;
+    (void)panelScaleListener;
+    (void)fontScaleListener;
     say("starting mode: {}", stageBanner());
     say("{} cycles anywhere: 2/2 -> 4/4 -> 8/8 -> 16/8 -> 24/12 -> 32/16 -> 40/20 -> off", stageKey());
-    say("{} toggles the terminal", terminalKey());
+    if (isMobileHost()) {
+        say("tap the Afterflow logo to open the control deck");
+    }
+    else {
+        say("{} opens the control deck", panelKey());
+    }
     say("host os: {} ({})", hostOSName(), hostOSDescription());
     checkForUpdates(true);
 }
@@ -3249,6 +5679,7 @@ class $modify(BufPlayLayer, PlayLayer) {
         state.wasAutoReleased = false;
         forgetPress();
         resetPending();
+        scheduleAfterflowOverlay(this);
         return true;
     }
 
@@ -3309,6 +5740,7 @@ class $modify(BufMenuLayer, MenuLayer) {
             }),
             nullptr
         ));
+        scheduleAfterflowOverlay(this);
         return true;
     }
 };
@@ -3317,6 +5749,7 @@ class $modify(BufEditorLayer, LevelEditorLayer) {
     bool init(GJGameLevel* gameLevel, bool withoutUI) {
         bool isSuccess = LevelEditorLayer::init(gameLevel, withoutUI);
         dropGhosts();
+        scheduleAfterflowOverlay(this);
         return isSuccess;
     }
 };

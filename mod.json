@@ -1,49 +1,118 @@
 {
-    "geode": "5.11.2",
-    "gd": {
-        "win": "2.2081",
-        "mac": "2.2081"
+  "geode": "5.11.2",
+  "gd": {
+    "win": "2.2081",
+    "mac": "2.2081",
+    "android": "2.2081",
+    "ios": "2.2081"
+  },
+  "id": "afterflow.prsevend",
+  "name": "Afterflow",
+  "version": "2.4.0",
+  "developer": "prsevend",
+  "description": "a predictive input cheat that fixes your early clicks and makes them accurate, with customizable UI colors and a polished control panel.",
+  "tags": [
+    "gameplay",
+    "utility",
+    "developer"
+  ],
+  "resources": {
+    "files": [
+      "resources/afterflow-body.fnt",
+      "resources/afterflow-body.png",
+      "resources/afterflow-display.fnt",
+      "resources/afterflow-display.png",
+      "resources/afterflow-logo.png",
+      "resources/OFL.txt"
+    ]
+  },
+  "settings": {
+    "terminal-title": {
+      "type": "title",
+      "name": "terminal",
+      "description": "terminal window options"
     },
-    "id": "afterflow.prsevend",
-    "name": "Afterflow",
-    "version": "v2.1.6",
-    "developer": "prsevend",
-    "description": "a predictive input cheat that fixes your early clicks and makes them accurate.",
-    "tags": [
-        "gameplay",
-        "utility",
-        "developer"
-    ],
-    "settings": {
-        "terminal-title": {
-            "type": "title",
-            "name": "terminal",
-            "description": "terminal window options"
-        },
-        "terminal-enabled": {
-            "type": "bool",
-            "name": "enable terminal",
-            "description": "allow the terminal key to open the afterflow log window",
-            "default": true
-        },
-        "keybinds-title": {
-            "type": "title",
-            "name": "keybinds",
-            "description": "change geodes keybinding anytime for afterflow"
-        },
-        "keybind-stage": {
-            "type": "keybind",
-            "name": "cycle stages",
-            "description": "cycle prediction stages",
-            "category": "gameplay",
-            "default": ["F6"]
-        },
-        "keybind-terminal": {
-            "type": "keybind",
-            "name": "terminal",
-            "description": "open or close the afterflow terminal",
-            "category": "universal",
-            "default": ["F9"]
-        }
+    "terminal-enabled": {
+      "type": "bool",
+      "name": "enable terminal",
+      "description": "show the terminal button in the afterflow control panel",
+      "default": true
+    },
+    "keybinds-title": {
+      "type": "title",
+      "name": "keybinds",
+      "description": "change geodes keybinding anytime for afterflow"
+    },
+    "keybind-stage": {
+      "type": "keybind",
+      "name": "cycle stages",
+      "description": "cycle prediction stages",
+      "category": "gameplay",
+      "default": [
+        "F6"
+      ]
+    },
+    "keybind-terminal": {
+      "type": "keybind",
+      "name": "control panel",
+      "description": "open or close the afterflow control panel",
+      "category": "universal",
+      "default": [
+        "F9"
+      ]
+    },
+    "ui-title": {
+      "type": "title",
+      "name": "ui customization",
+      "description": "customize the control panel appearance"
+    },
+    "ui-primary-color": {
+      "type": "color",
+      "name": "primary color",
+      "description": "primary gradient color for the panel",
+      "default": "#7C4DFF"
+    },
+    "ui-secondary-color": {
+      "type": "color",
+      "name": "secondary color",
+      "description": "secondary gradient color for the panel",
+      "default": "#FFFFFF"
+    },
+    "ui-surface-color": {
+      "type": "color",
+      "name": "surface color",
+      "description": "background color of the panel card",
+      "default": "#16161A"
+    },
+    "ui-text-color": {
+      "type": "color",
+      "name": "text color",
+      "description": "color used for all panel text",
+      "default": "#E8E9EE"
+    },
+    "ui-glow": {
+      "type": "bool",
+      "name": "glow",
+      "description": "draw a soft accent glow behind the panel",
+      "default": true
+    },
+    "ui-panel-scale": {
+      "type": "float",
+      "name": "panel scale",
+      "description": "adjust the overall size of the control panel",
+      "default": 0.7,
+      "min": 0.4,
+      "max": 1.3,
+      "step": 0.05
+    },
+    "ui-font-scale": {
+      "type": "float",
+      "name": "font scale",
+      "description": "adjust the text size in the control panel",
+      "default": 1.5,
+      "min": 0.8,
+      "max": 1.5,
+      "step": 0.05
     }
+  }
 }

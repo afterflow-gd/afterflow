@@ -1,3 +1,36 @@
+# v2.4.0
+
+- **auto-update in game**: the out-of-date popup now downloads, verifies and installs the new `.geode` itself, then restarts the game. no more browser round-trip.
+- the update download shows a live progress panel with percentage, MB downloaded / MB total and current speed in MB/s.
+- downloads always resolve `releases/latest/download/afterflow.prsevend.geode`, so the updater no longer depends on the release tag naming scheme.
+- update installs use a safe write (temp file + rename), so an interrupted download can no longer leave a corrupt `.geode` behind.
+- added a 120s transfer timeout to the update download so a dead connection cannot strand the progress panel.
+- **config import / export**: the settings tab can copy the current gameplay tuning to the clipboard as JSON and paste it back, with clamping and a status readout.
+- **game mode icons**: the settings tab shows the cube, ship, ball, ufo, wave, robot, spider and swing icons in your own colours, centred in their own row with a rounded backdrop. the icon for the mode you are currently in is highlighted, the rest dim.
+- [fix] game mode icons no longer render inside the theme colour swatches.
+- [fix] the newest log line is marked with a full-width accent row instead of a 3px vertical bar that looked like a text cursor.
+- [fix] panel glow reduced from 7 rings at 8 alpha to 5 rings at 3 alpha, and the drop shadow softened from 120 to 72 alpha.
+- [fix] panel shell is no longer crushed to near-black: the tint multipliers moved from `0.62/0.70` to `0.88/0.92`.
+- [fix] smoother rounded corners everywhere (`SEGMENTS` 10 -> 24).
+- [fix] `CMakeLists.txt` version was stuck at `2.3.0` while `mod.json` and `version.txt` said `2.4.0`.
+- [build] a post-build step now clears geode's extracted-mod cache so a rebuild can never silently load a stale dll again. disable with `-DAFTERFLOW_PURGE_UNZIPPED=OFF`.
+
+# v2.3.0
+
+- redesigned the in-game panel: compact header, stage pills, all-mode/wave stat readouts, striped live log, translucent cards and softer pill buttons.
+- new **ui customization** settings: primary color, secondary color, panel scale and font scale. changes apply live while the panel is open.
+- [fix] windows builds with clang-cl and ninja again; msvc-only flags and apple architectures are no longer applied to every platform.
+- [fix] the packaged `.geode` now includes the bundled fonts and their license.
+
+# v2.2.0
+
+- new custom in-game control panel on **f9** with stage arrows, stage dots, a live log, copy log, close and a terminal shortcut.
+- the panel pauses the game while open and resumes when it is closed.
+- added android and ios targets. mobile gets a draggable **af** button that opens the same panel, and its position is saved between sessions.
+- the panel uses bundled sora fonts, with `bigFont.fnt` as a fallback.
+- f9 now opens the control panel instead of the terminal directly. use the **terminal** button in the panel to open the log window.
+- the live log keeps recent messages so the panel can show them and copy them to the clipboard.
+
 # v2.1.6
 
 - f6 now cycles stages from the windows powershell terminal and the linux kitty terminal. windows handles f6 directly in the log viewer; kitty maps f6 to a cycle helper and keeps the raw-key fallback.
