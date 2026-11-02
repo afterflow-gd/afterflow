@@ -40,11 +40,11 @@ jobs:
 
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
-          with:
-            combine: true
-            target: ${{ matrix.config.target }}
-            bindings-ref: ${{ matrix.config.bindings-ref }}
-            configure-args: ${{ matrix.config.configure-args }}
+        with:
+          combine: true
+          target: ${{ matrix.config.target }}
+          bindings-ref: ${{ matrix.config.bindings-ref }}
+          configure-args: ${{ matrix.config.configure-args }}
 
   package:
     name: Package builds
