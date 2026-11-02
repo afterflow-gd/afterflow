@@ -142,6 +142,54 @@ namespace {
     };
     constexpr int STAGE_TABLE_SIZE = sizeof(STAGE_TABLE) / sizeof(STAGE_TABLE[0]);
 
+    constexpr int STAGE_MAX_STAGES = 24;
+
+    std::vector<std::string> g_customStages;
+    bool g_customStagesLoaded = false;
+
+    void loadCustomStages() {
+        if (g_customStagesLoaded) {
+            return;
+        }
+        g_customStagesLoaded = true;
+        g_customStages.clear();
+        std::string raw = Mod::get()->getSavedValue<std::string>("custom-stages", "");
+        std::string piece;
+        for (size_t index = 0; index <= raw.size(); ++index) {
+            if (index == raw.size() || raw[index] == ';') {
+                if (!piece.empty()) {
+                    g_customStages.push_back(piece);
+                }
+                piece.clear();
+            } else {
+                piece += raw[index];
+            }
+        }
+    }
+
+    void saveCustomStages() {
+        std::string raw;
+        for (size_t index = 0; index < g_customStages.size(); ++index) {
+            if (index > 0) { raw += ';'; }
+            raw += g_customStages[index];
+        }
+        Mod::get()->setSavedValue<std::string>("custom-stages", raw);
+        (void)Mod::get()->saveData();
+    }
+
+    int stageTotalCount() {
+        loadCustomStages();
+        return STAGE_TABLE_SIZE + static_cast<int>(g_customStages.size());
+    }
+
+    bool stageEnabledAt(int index) {
+        if (index >= 0 && index < STAGE_TABLE_SIZE) {
+            return STAGE_TABLE[index].isEnabled;
+        }
+        loadCustomStages();
+        return index >= STAGE_TABLE_SIZE && index < stageTotalCount();
+    }
+
     struct QueuedInput {
         int ticksRemaining;
         bool isDown;
@@ -2183,10 +2231,16 @@ finally {
     }
 
     void applyStage() {
-        auto const& stageDefinition = STAGE_TABLE[state.stageIndex];
-        state.isEnabled = stageDefinition.isEnabled;
-        state.ticksAllModes = stageDefinition.ticksAllModes;
-        state.ticksWaveMode = stageDefinition.ticksWaveMode;
+        if (state.stageIndex >= 0 && state.stageIndex < STAGE_TABLE_SIZE) {
+            auto const& stageDefinition = STAGE_TABLE[state.stageIndex];
+            state.isEnabled = stageDefinition.isEnabled;
+            state.ticksAllModes = stageDefinition.ticksAllModes;
+            state.ticksWaveMode = stageDefinition.ticksWaveMode;
+        } else {
+            state.isEnabled = true;
+            state.ticksAllModes = 2;
+            state.ticksWaveMode = 2;
+        }
     }
 
     std::string stageText() {
@@ -2245,8 +2299,12 @@ finally {
     constexpr float STAGE_TRACK_HEIGHT = 36.f;
     constexpr float STAGE_TRACK_PADDING = 4.f;
     constexpr float STAGE_TRACK_GAP = 3.f;
-    constexpr float STAGE_SLOT_WIDTH = (STAGE_TRACK_WIDTH - STAGE_TRACK_PADDING * 2.f -
-        STAGE_TRACK_GAP * static_cast<float>(STAGE_TABLE_SIZE - 1)) / static_cast<float>(STAGE_TABLE_SIZE);
+    float stageSlotWidth() {
+        int count = stageTotalCount();
+        if (count < 1) { count = 1; }
+        return (STAGE_TRACK_WIDTH - STAGE_TRACK_PADDING * 2.f
+            - STAGE_TRACK_GAP * static_cast<float>(count - 1)) / static_cast<float>(count);
+    }
     constexpr float STAGE_CELL_HEIGHT = 28.f;
     constexpr float STAGE_LABEL_Y = STAGE_TRACK_Y + STAGE_TRACK_HEIGHT * 0.5f;
 
@@ -2478,9 +2536,9 @@ finally {
 
     CCRect stageSlotRect(int index) {
         return CCRect(
-            STAGE_TRACK_X + STAGE_TRACK_PADDING + static_cast<float>(index) * (STAGE_SLOT_WIDTH + STAGE_TRACK_GAP),
+            STAGE_TRACK_X + STAGE_TRACK_PADDING + static_cast<float>(index) * (stageSlotWidth() + STAGE_TRACK_GAP),
             STAGE_TRACK_Y,
-            STAGE_SLOT_WIDTH,
+            stageSlotWidth(),
             STAGE_TRACK_HEIGHT
         );
     }
@@ -2546,6 +2604,18 @@ finally {
             return "unknown";
         }
         return names[index];
+    }
+
+    char const* stageLabelAt(int index) {
+        if (index >= 0 && index < STAGE_TABLE_SIZE) {
+            return stageName(index);
+        }
+        loadCustomStages();
+        int custom = index - STAGE_TABLE_SIZE;
+        if (custom >= 0 && custom < static_cast<int>(g_customStages.size())) {
+            return g_customStages[custom].c_str();
+        }
+        return "?";
     }
     CCNode* makeDeckButton(CCNode* parent, CCRect const& rect, std::string const& text, bool isFilled, bool useDisplayFont, float fontScale, bool isTinted = false) {
         auto* button = CCNode::create();
@@ -2692,6 +2762,9 @@ finally {
             SettingsRow,
             ImportConfig,
             ExportConfig,
+            ModeIcon,
+            ModeIconAdd,
+            StageAdd,
         };
 
         void buildDeck();
@@ -2734,7 +2807,7 @@ finally {
         CCLabelBMFont* m_activityLabel = nullptr;
         CCLabelBMFont* m_activityCountLabel = nullptr;
         CCLabelBMFont* m_activityLines[LOG_LINE_COUNT] = {};
-        CCLabelBMFont* m_stageNameLabels[STAGE_TABLE_SIZE] = {};
+        CCLabelBMFont* m_stageNameLabels[STAGE_MAX_STAGES] = {};
         CCLabelBMFont* m_stageHintKeyLabel = nullptr;
         CCLabelBMFont* m_stageHintLabel = nullptr;
         CCLabelBMFont* m_panelHintKeyLabel = nullptr;
@@ -2761,7 +2834,11 @@ finally {
         CCDrawNode* m_themeSwatches = nullptr;
         CCDrawNode* m_glow = nullptr;
         CCNode* m_modeIconContainer = nullptr;
-        SimplePlayer* m_modeIcons[MODE_ICON_COUNT] = {};
+        std::vector<SimplePlayer*> m_modeIcons;
+        std::vector<int>& modeSlots();
+        void saveModeSlots();
+        std::vector<int> m_modeSlots;
+        bool m_modeSlotsLoaded = false;
         CCLabelBMFont* m_configStatusLabel = nullptr;
         CCNode* m_importButton = nullptr;
         CCNode* m_exportButton = nullptr;
@@ -2885,9 +2962,9 @@ finally {
         m_configStatusLabel = nullptr;
         m_importButton = nullptr;
         m_exportButton = nullptr;
-        for (int index = 0; index < MODE_ICON_COUNT; ++index) { m_modeIcons[index] = nullptr; }
+        m_modeIcons.clear();
         for (int index = 0; index < LOG_LINE_COUNT; ++index) { m_activityLines[index] = nullptr; }
-        for (int index = 0; index < STAGE_TABLE_SIZE; ++index) { m_stageNameLabels[index] = nullptr; }
+        for (int index = 0; index < STAGE_MAX_STAGES; ++index) { m_stageNameLabels[index] = nullptr; }
         for (int index = 0; index < TAB_COUNT; ++index) { m_tabLabels[index] = nullptr; }
         for (int index = 0; index < CHIP_COUNT; ++index) { m_chipLabels[index] = nullptr; }
         for (int index = 0; index < 4; ++index) {
@@ -3013,6 +3090,12 @@ finally {
         m_stageIndexLabel->setPosition(CCPoint(CONTENT_RIGHT - 22.f, STAGE_NAME_Y));
         m_deck->addChild(m_stageIndexLabel, 3);
 
+        if (auto* addStage = makeLabel("+", false, 0.62f, accentColor())) {
+            addStage->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            addStage->setPosition(CCPoint(CONTENT_RIGHT - 68.f, STAGE_NAME_Y));
+            m_deck->addChild(addStage, 3);
+        }
+
         m_stageDescriptionLabel = makeLabel("", false, 0.74f, softTextColor());
         m_stageDescriptionLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
         m_stageDescriptionLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_META_Y));
@@ -3020,9 +3103,9 @@ finally {
 
         m_stageTrack = makeDrawNode();
         m_deck->addChild(m_stageTrack, 1);
-        for (int index = 0; index < STAGE_TABLE_SIZE; ++index) {
+        for (int index = 0; index < stageTotalCount(); ++index) {
             auto cell = stageCellRect(index);
-            auto* nameLabel = makeLabel(stageName(index), false, 0.58f, softTextColor());
+            auto* nameLabel = makeLabel(stageLabelAt(index), false, 0.58f, softTextColor());
             float natural = nameLabel->getContentSize().width * nameLabel->getScale();
             if (natural > cell.size.width - 8.f && natural > 0.f) {
                 nameLabel->setScale(nameLabel->getScale() * (cell.size.width - 8.f) / natural);
@@ -3119,7 +3202,7 @@ finally {
         m_modeIconContainer = CCNode::create();
         m_modeIconContainer->setAnchorPoint(CCPoint(0.f, 0.5f));
         m_modeIconContainer->setPosition(CCPoint(MODE_ICON_X, MODE_ICON_Y));
-        m_modeIconContainer->setContentSize(CCSize(MODE_ICON_STEP * static_cast<float>(MODE_ICON_COUNT), MODE_ICON_SIZE));
+        m_modeIconContainer->setContentSize(CCSize(MODE_ICON_STEP * static_cast<float>(modeSlots().size() + 1), MODE_ICON_SIZE));
         m_deck->addChild(m_modeIconContainer, 3);
 
         m_importButton = makeDeckButton(m_deck, configButtonRect(0), "import", false, false, 0.58f);
@@ -3327,11 +3410,11 @@ finally {
         ccColor3B live = state.isEnabled ? accentColor() : warningColor();
 
         if (m_stageIndexLabel) {
-            m_stageIndexLabel->setString(fmt::format("{:02}/{:02}", state.stageIndex + 1, STAGE_TABLE_SIZE).c_str());
+            m_stageIndexLabel->setString(fmt::format("{:02}/{:02}", state.stageIndex + 1, stageTotalCount()).c_str());
             m_stageIndexLabel->setColor(live);
         }
         if (m_stageNameLabel) {
-            m_stageNameLabel->setString(stageName(state.stageIndex));
+            m_stageNameLabel->setString(stageLabelAt(state.stageIndex));
             m_stageNameLabel->setColor(state.isEnabled ? color3(240, 241, 246) : warningColor());
         }
         if (m_stageDescriptionLabel) {
@@ -3378,7 +3461,7 @@ finally {
                 1.f
             );
 
-            bool selectedAvailable = STAGE_TABLE[state.stageIndex].isEnabled;
+            bool selectedAvailable = stageEnabledAt(state.stageIndex);
             ccColor3B selectedTint = selectedAvailable ? accentColor() : warningColor();
             drawCurvedRect(
                 m_stageTrack,
@@ -3389,13 +3472,13 @@ finally {
                 1.f
             );
 
-            for (int index = 0; index < STAGE_TABLE_SIZE; ++index) {
+            for (int index = 0; index < stageTotalCount(); ++index) {
                 auto* nameLabel = m_stageNameLabels[index];
                 if (!nameLabel) {
                     continue;
                 }
                 bool isSelected = index == state.stageIndex;
-                bool isAvailable = STAGE_TABLE[index].isEnabled;
+                bool isAvailable = stageEnabledAt(index);
                 nameLabel->setColor(isSelected ? color3(248, 249, 253) : (isAvailable ? softTextColor() : warningColor()));
                 nameLabel->setOpacity(isSelected ? 255 : 205);
             }
@@ -3522,12 +3605,12 @@ finally {
                 }
             }
         }
-        for (int index = 0; index < MODE_ICON_COUNT; ++index) {
+        for (int index = 0; index < static_cast<int>(m_modeIcons.size()); ++index) {
             auto* icon = m_modeIcons[index];
             if (!icon) {
                 continue;
             }
-            bool isActive = index == activeMode;
+            bool isActive = index < static_cast<int>(m_modeSlots.size()) && m_modeSlots[index] == activeMode;
             float baseScale = MODE_ICON_SIZE / 40.f;
             // active: full size + full opacity, inactive: 80% size + dimmed,
             // and a neutral mid-state when the player is not inside a level.
@@ -3828,13 +3911,34 @@ finally {
             return HitTarget::CopyLog;
         }
         if (m_activeTab == 1) {
-            for (int index = 0; index < STAGE_TABLE_SIZE; ++index) {
+            for (int index = 0; index < stageTotalCount(); ++index) {
                 if (stageSlotRect(index).containsPoint(point)) {
                     if (stageSlot) {
                         *stageSlot = index;
                     }
                     return HitTarget::StageSlot;
                 }
+            }
+        }
+        if (m_activeTab == 2) {
+            int slotCount = static_cast<int>(m_modeSlots.size());
+            for (int index = 0; index <= slotCount; ++index) {
+                CCRect tile(
+                    MODE_ICON_X + MODE_ICON_STEP * static_cast<float>(index) + 3.f,
+                    MODE_ICON_Y - (MODE_ICON_SIZE + 8.f) * 0.5f,
+                    MODE_ICON_STEP - 6.f,
+                    MODE_ICON_SIZE + 8.f
+                );
+                if (tile.containsPoint(point)) {
+                    if (stageSlot) { *stageSlot = index; }
+                    return (index == slotCount) ? HitTarget::ModeIconAdd : HitTarget::ModeIcon;
+                }
+            }
+        }
+        if (m_activeTab == 1) {
+            CCRect addStageRect(CONTENT_RIGHT - 78.f, STAGE_NAME_Y - 10.f, 20.f, 20.f);
+            if (addStageRect.containsPoint(point)) {
+                return HitTarget::StageAdd;
             }
         }
         return HitTarget::None;
@@ -3906,6 +4010,36 @@ finally {
         }
 
         switch (target) {
+            case HitTarget::StageAdd: {
+                loadCustomStages();
+                if (stageTotalCount() < STAGE_MAX_STAGES) {
+                    g_customStages.push_back("custom " + std::to_string(static_cast<int>(g_customStages.size()) + 1));
+                    saveCustomStages();
+                    rebuildDeck();
+                }
+                break;
+            }
+            case HitTarget::ModeIcon: {
+                auto& slots = modeSlots();
+                int index = m_pressedStageSlot;
+                if (index >= 0 && index < static_cast<int>(slots.size())) {
+                    slots[index] = (slots[index] + 1) % 8;
+                    saveModeSlots();
+                    updateModeIcons();
+                    refresh();
+                }
+                break;
+            }
+            case HitTarget::ModeIconAdd: {
+                auto& slots = modeSlots();
+                if (slots.size() < 16) {
+                    slots.push_back(0);
+                    saveModeSlots();
+                    updateModeIcons();
+                    refresh();
+                }
+                break;
+            }
             case HitTarget::Dismiss:
                 closePanel();
                 break;
@@ -4016,31 +4150,71 @@ finally {
         refresh();
     }
 
+    std::vector<int>& AfterflowOverlay::modeSlots() {
+    if (!m_modeSlotsLoaded) {
+        m_modeSlotsLoaded = true;
+        m_modeSlots.clear();
+        std::string raw = Mod::get()->getSavedValue<std::string>("mode-slots", "");
+        std::string piece;
+        for (size_t index = 0; index <= raw.size(); ++index) {
+            if (index == raw.size() || raw[index] == ',') {
+                if (!piece.empty()) {
+                    int value = 0;
+                    for (size_t d = 0; d < piece.size(); ++d) {
+                        char c = piece[d];
+                        if (c >= '0' && c <= '9') { value = value * 10 + (c - '0'); }
+                    }
+                    m_modeSlots.push_back(std::clamp(value, 0, 7));
+                }
+                piece.clear();
+            } else {
+                piece += raw[index];
+            }
+        }
+        if (m_modeSlots.empty()) {
+            m_modeSlots = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        }
+    }
+    return m_modeSlots;
+    }
+
+    void AfterflowOverlay::saveModeSlots() {
+    std::string raw;
+    for (size_t index = 0; index < m_modeSlots.size(); ++index) {
+        if (index > 0) { raw += ','; }
+        raw += std::to_string(m_modeSlots[index]);
+    }
+    Mod::get()->setSavedValue<std::string>("mode-slots", raw);
+    (void)Mod::get()->saveData();
+    }
+
     void AfterflowOverlay::updateModeIcons() {
         if (!m_modeIconContainer) {
             return;
         }
         m_modeIconContainer->removeAllChildrenWithCleanup(true);
-        for (int index = 0; index < MODE_ICON_COUNT; ++index) {
-            m_modeIcons[index] = nullptr;
-        }
+        m_modeIcons.clear();
 
         // the row backdrop is a child of the container, so rebuilding the
         // icons has to put it back as well
         if (auto* iconBack = makeDrawNode()) {
-            drawCurvedRect(
-                iconBack,
-                CCRect(
-                    -10.f,
-                    -MODE_ICON_SIZE * 0.5f - 6.f,
-                    MODE_ICON_STEP * static_cast<float>(MODE_ICON_COUNT) + 20.f,
-                    MODE_ICON_SIZE + 12.f
-                ),
-                10.f,
-                color4(255, 255, 255, 12),
-                color4(255, 255, 255, 34),
-                1.f
-            );
+            int slotCount = static_cast<int>(modeSlots().size());
+            for (int index = 0; index <= slotCount; ++index) {
+                bool isAdd = index == slotCount;
+                drawCurvedRect(
+                    iconBack,
+                    CCRect(
+                        MODE_ICON_STEP * static_cast<float>(index) + 3.f,
+                        -MODE_ICON_SIZE * 0.5f - 4.f,
+                        MODE_ICON_STEP - 6.f,
+                        MODE_ICON_SIZE + 8.f
+                    ),
+                    8.f,
+                    color4(255, 255, 255, isAdd ? 6 : 12),
+                    color4(0, 0, 0, 0),
+                    0.f
+                );
+            }
             m_modeIconContainer->addChild(iconBack, -1);
         }
 
@@ -4049,7 +4223,7 @@ finally {
             return;
         }
 
-        int const frames[MODE_ICON_COUNT] = {
+        int const frames[8] = {
             manager->getPlayerFrame(),
             manager->getPlayerShip(),
             manager->getPlayerBall(),
@@ -4059,7 +4233,7 @@ finally {
             manager->getPlayerSpider(),
             manager->getPlayerSwing(),
         };
-        IconType const types[MODE_ICON_COUNT] = {
+        IconType const types[8] = {
             IconType::Cube, IconType::Ship, IconType::Ball, IconType::Ufo,
             IconType::Wave, IconType::Robot, IconType::Spider, IconType::Swing,
         };
@@ -4067,12 +4241,15 @@ finally {
         ccColor3B secondary = manager->colorForIdx(manager->getPlayerColor2());
 
         float baseScale = MODE_ICON_SIZE / 40.f;
-        for (int index = 0; index < MODE_ICON_COUNT; ++index) {
+        auto& slots = modeSlots();
+        m_modeIcons.assign(slots.size(), nullptr);
+        for (int index = 0; index < static_cast<int>(slots.size()); ++index) {
+            int mode = std::clamp(slots[index], 0, 7);
             auto* icon = SimplePlayer::create(1);
             if (!icon) {
                 continue;
             }
-            icon->updatePlayerFrame(frames[index], types[index]);
+            icon->updatePlayerFrame(frames[mode], types[mode]);
             icon->setColors(primary, secondary);
             icon->setAnchorPoint(CCPoint(0.5f, 0.5f));
             icon->setScale(baseScale);
@@ -4080,6 +4257,12 @@ finally {
             icon->setPosition(CCPoint(MODE_ICON_STEP * (static_cast<float>(index) + 0.5f), 0.f));
             m_modeIconContainer->addChild(icon);
             m_modeIcons[index] = icon;
+        }
+
+        if (auto* plus = makeLabel("+", false, 0.62f, accentColor())) {
+            plus->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            plus->setPosition(CCPoint(MODE_ICON_STEP * (static_cast<float>(slots.size()) + 0.5f), 0.f));
+            m_modeIconContainer->addChild(plus, 2);
         }
     }
 
@@ -5476,7 +5659,7 @@ finally {
     }
 
     void setStageIndex(int stageIndex) {
-        int nextIndex = (stageIndex % STAGE_TABLE_SIZE + STAGE_TABLE_SIZE) % STAGE_TABLE_SIZE;
+        int nextIndex = (stageIndex % stageTotalCount() + stageTotalCount()) % stageTotalCount();
         bool didChange = nextIndex != state.stageIndex;
         state.stageIndex = nextIndex;
         Mod::get()->setSavedValue("stage", state.stageIndex);
@@ -5569,10 +5752,10 @@ finally {
 $on_mod(Loaded) {
 
     constexpr int STAGE_SCHEMA_VERSION = 2;
-    int savedStageIndex = std::clamp(Mod::get()->getSavedValue<int>("stage", 0), 0, STAGE_TABLE_SIZE - 1);
+    int savedStageIndex = std::clamp(Mod::get()->getSavedValue<int>("stage", 0), 0, stageTotalCount() - 1);
     if (Mod::get()->getSavedValue<int>("stage-schema", 1) < STAGE_SCHEMA_VERSION) {
         if (savedStageIndex == 6) {
-            savedStageIndex = STAGE_TABLE_SIZE - 1;
+            savedStageIndex = stageTotalCount() - 1;
         }
         Mod::get()->setSavedValue("stage", savedStageIndex);
         Mod::get()->setSavedValue("stage-schema", STAGE_SCHEMA_VERSION);
