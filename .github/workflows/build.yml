@@ -17,10 +17,12 @@ jobs:
         config:
           - name: Windows
             os: windows-latest
+          # Intel runners avoid the long macOS arm64 queue. Both the
+          # universal macOS build and the iOS build work on Intel hosts.
           - name: macOS
-            os: macos-latest
+            os: macos-26-intel
           - name: iOS
-            os: macos-latest
+            os: macos-26-intel
             target: iOS
             bindings-ref: 1605f500d053f8de122bf5c7dc6d17c24866e02e
             configure-args: -DSKIP_BUILDING_CODEGEN=OFF
