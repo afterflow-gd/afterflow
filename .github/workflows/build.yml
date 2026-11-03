@@ -30,6 +30,7 @@ jobs:
           - name: Android64
             os: ubuntu-latest
             target: Android64
+            configure-args: -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
 
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
