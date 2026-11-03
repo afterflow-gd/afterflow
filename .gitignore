@@ -1,0 +1,6 @@
+# CMake / Geode build trees
+build/
+build-clang/
+
+# Local build logs
+build_clang_*.log

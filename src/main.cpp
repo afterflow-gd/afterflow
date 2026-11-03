@@ -162,8 +162,6 @@ namespace {
         return std::clamp(value, CUSTOM_TICKS_MIN, CUSTOM_TICKS_MAX);
     }
 
-    // real popup shown when a custom delay crosses over the safe limit.
-    // the player has to press the button to dismiss it
     void showHighTicksPopup() {
         std::string message = fmt::format(
             "delays over {0} ticks may lag or work worse than {0}.\n"
@@ -194,7 +192,6 @@ namespace {
                     g_customStages.push_back({ clampCustomTicks(ticksAll), clampCustomTicks(ticksWave) });
                 }
                 else {
-                    // old name-only placeholder from v2.4.0/2.4.1
                     g_customStages.push_back({ 8, 8 });
                 }
             }
@@ -636,8 +633,6 @@ namespace {
         return static_cast<float>(Mod::get()->getSettingValue<double>("ui-panel-scale"));
     }
 
-    // The deck itself is intentionally small; type is boosted so labels stay
-    // readable at that footprint instead of shrinking with the panel.
     constexpr float FONT_SCALE_BOOST = 1.0f;
 
     float getUIFontScale() {
@@ -1453,8 +1448,6 @@ finally {
         "https://raw.githubusercontent.com/afterflow-gd/afterflow/refs/heads/main/version.txt";
     constexpr char const* RELEASE_URL_PREFIX =
         "https://github.com/afterflow-gd/afterflow/releases/tag/";
-    // always resolves to the newest published package, so the auto-updater
-    // does not have to guess the release tag naming scheme
     constexpr char const* UPDATE_ASSET_URL =
         "https://github.com/afterflow-gd/afterflow/releases/latest/download/afterflow.prsevend.geode";
 
@@ -1487,7 +1480,6 @@ finally {
         return parsedInstalledVersion.unwrap() < parsedLatestVersion.unwrap();
     }
 
-    // ---- in-game update download + progress overlay -----------------------
     constexpr float UPDATE_PANEL_WIDTH = 520.f;
     constexpr float UPDATE_PANEL_HEIGHT = 156.f;
     constexpr float UPDATE_BAR_WIDTH = 420.f;
@@ -1515,7 +1507,6 @@ finally {
             return true;
         }
 
-        // swallow every touch so the game below cannot be interacted with
         void registerWithTouchDispatcher() override {
             cocos2d::CCTouchDispatcher::get()->addTargetedDelegate(this, -500, true);
         }
@@ -1691,7 +1682,6 @@ finally {
         say("downloading update from {} (target v{})", assetUrl, latestVersion);
 
         auto request = web::WebRequest();
-        // a stuck connection must not leave the overlay up forever
         request.timeout(std::chrono::seconds(120));
         request.onProgress([](web::WebProgress const& progress) {
             size_t downloaded = progress.downloaded();
@@ -1725,8 +1715,6 @@ finally {
                     setUpdateBar(1.f);
 
                     auto packagePath = Mod::get()->getPackagePath();
-                    // writeBinarySafe stages to a temp file and renames, so a
-                    // failed or interrupted write cannot leave a corrupt .geode
                     auto writeResult = geode::utils::file::writeBinarySafe(packagePath, bytes);
                     if (!writeResult.isOk()) {
                         failUpdateDownload(fmt::format("could not write update file: {}", writeResult.unwrapErr()));
@@ -2269,10 +2257,6 @@ finally {
     }
 
     void clickBudget() {
-        // above 240 steps per second every stage is simulated with st() times
-        // more (and shorter) ticks, so the same search costs roughly that much
-        // more cpu time. scale the time limit with it, otherwise the search runs
-        // out of budget and gives up. at 240 steps/s or below this is exactly 1.
         double budgetScale = std::clamp(static_cast<double>(stepScale()), 1.0, 3.0);
         double budgetMilliseconds = state.userBudgetMilliseconds * budgetScale;
         if (state.automaticBudget) {
@@ -2345,6 +2329,7 @@ finally {
     constexpr float LOG_WIDTH = CONTENT_WIDTH;
     constexpr float LOG_HEIGHT = CARD_HEIGHT;
     constexpr float LOG_HEADER_Y = 320.f;
+    constexpr float SETTINGS_HEADER_Y = 330.f;
     constexpr float LOG_DIVIDER_Y = 302.f;
     constexpr float LOG_LINE_START_Y = 282.f;
     constexpr float LOG_LINE_STEP = 44.f;
@@ -2386,18 +2371,41 @@ finally {
     constexpr float COPY_WIDTH = 74.f;
     constexpr float COPY_HEIGHT = 32.f;
 
+    constexpr float LOG_EXPAND_WIDTH = 86.f;
+    constexpr float LOG_EXPAND_X = COPY_X - 10.f - LOG_EXPAND_WIDTH;
+    constexpr float LOG_EXPAND_HEIGHT = COPY_HEIGHT;
+    constexpr float LOG_PANE_TOP = LOG_DIVIDER_Y - 8.f;
+    constexpr float LOG_PANE_BOTTOM = CARD_BOTTOM + 6.f;
+
+    constexpr int LOG_VIEW_LINE_COUNT = 12;
+    constexpr float LOG_VIEW_LINE_STEP = 29.f;
+    constexpr float LOG_VIEW_LINE_SCALE = 0.62f;
+    constexpr float LOG_VIEW_CARD_X = 14.f;
+    constexpr float LOG_VIEW_CARD_Y = 14.f;
+    constexpr float LOG_VIEW_CARD_WIDTH = DECK_WIDTH - 28.f;
+    constexpr float LOG_VIEW_CARD_HEIGHT = DECK_HEIGHT - 28.f;
+
     constexpr float DISMISS_X = CONTENT_RIGHT - 30.f;
     constexpr float DISMISS_Y = HEADER_Y - 15.f;
     constexpr float DISMISS_WIDTH = 30.f;
     constexpr float DISMISS_HEIGHT = 30.f;
 
-    constexpr int THEME_COUNT = 6;
-    constexpr float SWATCH_WIDTH = 94.f;
+    constexpr int THEME_COUNT = 14;
+    constexpr int THEMES_PER_ROW = 7;
+    constexpr int THEME_ROW_COUNT = (THEME_COUNT + THEMES_PER_ROW - 1) / THEMES_PER_ROW;
+    constexpr float SWATCH_WIDTH = 84.f;
     constexpr float SWATCH_HEIGHT = 38.f;
-    constexpr float SWATCH_GAP = 8.f;
+    constexpr float SWATCH_GAP = 6.f;
+    constexpr float SWATCH_ROW_GAP = 8.f;
     constexpr float SWATCH_X = CONTENT_X + 20.f;
     constexpr float SWATCH_Y = 272.f;
+
+    constexpr float CREDITS_CARD_WIDTH = 452.f;
+    constexpr float CREDITS_CARD_HEIGHT = 318.f;
     constexpr float SETTINGS_ROW_Y[2] = { 190.f, 142.f };
+    constexpr int SETTINGS_CELL_COUNT = 3;
+    constexpr float SETTINGS_CELL_GAP = 10.f;
+    constexpr float SETTINGS_CELL_WIDTH = (CONTENT_WIDTH - 32.f - SETTINGS_CELL_GAP) * 0.5f;
 
     constexpr int MODE_ICON_COUNT = 8;
     constexpr float MODE_ICON_STEP = 32.f;
@@ -2483,12 +2491,20 @@ finally {
     };
 
     UITheme const THEMES[THEME_COUNT] = {
-        { "violet", 0x7C4DFF, 0xB79CFF, 0x16161A, 0xE8E9EE },
-        { "ocean",  0x3BA3FF, 0x8FD0FF, 0x121820, 0xE6EDF5 },
-        { "mint",   0x34D399, 0x8EE8C4, 0x101A17, 0xE4F2EC },
-        { "amber",  0xFFB454, 0xFFD79B, 0x1B1712, 0xF4EDE3 },
-        { "rose",   0xFF6B8A, 0xFFB3C3, 0x1B1418, 0xF5E8EC },
-        { "mono",   0xC9CDD6, 0xFFFFFF, 0x15161A, 0xEDEEF2 },
+        { "violet",  0x7C4DFF, 0xB79CFF, 0x16161A, 0xE8E9EE },
+        { "ocean",   0x3BA3FF, 0x8FD0FF, 0x121820, 0xE6EDF5 },
+        { "mint",    0x34D399, 0x8EE8C4, 0x101A17, 0xE4F2EC },
+        { "amber",   0xFFB454, 0xFFD79B, 0x1B1712, 0xF4EDE3 },
+        { "rose",    0xFF6B8A, 0xFFB3C3, 0x1B1418, 0xF5E8EC },
+        { "mono",    0xC9CDD6, 0xFFFFFF, 0x15161A, 0xEDEEF2 },
+        { "ice",     0x67D5FF, 0xBFEAFF, 0x101820, 0xE6F1F7 },
+        { "sunset",  0xFF8A5B, 0xFFC29E, 0x1C1512, 0xF7EAE2 },
+        { "grape",   0xA855F7, 0xD5B4FF, 0x17131F, 0xEFE7F7 },
+        { "lime",    0xA3E635, 0xD9F99D, 0x141A10, 0xEAF3DF },
+        { "crimson", 0xF43F5E, 0xFF9EB0, 0x1B1115, 0xF5E4E8 },
+        { "slate",   0x94A3B8, 0xE2E8F0, 0x151A21, 0xE8EDF3 },
+        { "dark",    0xF2F3F7, 0x14161B, 0x0A0B0E, 0xF2F3F7 },
+        { "white",   0x3B82F6, 0xFFFFFF, 0xF4F2ED, 0x1C1D22 },
     };
 
     ccColor3B accentColor() {
@@ -2508,6 +2524,14 @@ finally {
         return color3(static_cast<int>(base.r * factor), static_cast<int>(base.g * factor), static_cast<int>(base.b * factor));
     }
 
+    ccColor3B mixColor(ccColor3B from, ccColor3B to, float t) {
+        t = std::clamp(t, 0.f, 1.f);
+        auto blend = [t](unsigned char a, unsigned char b) {
+            return static_cast<unsigned char>(static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * t);
+        };
+        return color3(blend(from.r, to.r), blend(from.g, to.g), blend(from.b, to.b));
+    }
+
     ccColor3B softTextColor() {
         return blendTextColor(0.68f);
     }
@@ -2518,6 +2542,20 @@ finally {
 
     ccColor3B faintTextColor() {
         return blendTextColor(0.46f);
+    }
+
+    bool lightSurface() {
+        ccColor3B surface = getUISurfaceColor();
+        float const luminance = 0.299f * surface.r + 0.587f * surface.g + 0.114f * surface.b;
+        return luminance > 145.f;
+    }
+
+    ccColor4F panelTint(int alpha) {
+        return lightSurface() ? color4(0, 0, 0, alpha) : color4(255, 255, 255, alpha);
+    }
+
+    ccColor3B onSurfaceStrong() {
+        return lightSurface() ? color3(24, 25, 30) : color3(244, 245, 250);
     }
 
     char const* displayFont() {
@@ -2537,16 +2575,12 @@ finally {
         }
         label->setScale(scale * getUIFontScale());
         label->setColor(color);
-        // smooth the bitmap font atlas so scaled text is not pixelated
         if (auto* texture = label->getTexture()) {
             texture->setAntiAliasTexParameters();
         }
         return label;
     }
 
-    // CCDrawNode is created with a premultiplied blend while its shader emits
-    // straight alpha. Forcing standard alpha blending keeps translucent fills
-    // from turning into opaque white blocks.
     CCDrawNode* makeDrawNode() {
         auto* node = CCDrawNode::create();
         if (node) {
@@ -2566,6 +2600,74 @@ finally {
             sprite->setScale(size / longestSide);
         }
         return sprite;
+    }
+
+    CCNode* makeGlowingLogo(float size) {
+        auto* node = CCNode::create();
+        node->setContentSize(CCSize(size, size));
+        node->setAnchorPoint(CCPoint(0.5f, 0.5f));
+        if (auto* glow = makeDrawNode()) {
+            for (int ring = 4; ring >= 1; --ring) {
+                float const spread = size * 0.06f * static_cast<float>(ring);
+                int const alpha = 8 + (4 - ring) * 5;
+                glow->drawCircle(
+                    CCPoint(size * 0.5f, size * 0.5f),
+                    size * 0.5f + spread,
+                    color4(accentColor(), alpha),
+                    0.f,
+                    color4(0, 0, 0, 0),
+                    40
+                );
+            }
+            node->addChild(glow, 0);
+        }
+        if (auto* sprite = makeLogoMark(size)) {
+            sprite->setPosition(CCPoint(size * 0.5f, size * 0.5f));
+            node->addChild(sprite, 1);
+        }
+        return node;
+    }
+
+    CCNode* makeBrandWordmark(std::string const& text, float scale) {
+        auto* root = CCNode::create();
+        ccColor3B const from = getUIPrimaryColor();
+        ccColor3B const to = getUISecondaryColor();
+        ccColor3B const surface = getUISurfaceColor();
+        float const surfaceLuma = 0.299f * surface.r + 0.587f * surface.g + 0.114f * surface.b;
+        float cursor = 0.f;
+        int const count = static_cast<int>(text.size());
+        for (int index = 0; index < count; ++index) {
+            float const t = count > 1 ? static_cast<float>(index) / static_cast<float>(count - 1) : 0.f;
+            ccColor3B letter = mixColor(from, to, t);
+            float const letterLuma = 0.299f * letter.r + 0.587f * letter.g + 0.114f * letter.b;
+            if (std::abs(letterLuma - surfaceLuma) < 60.f) {
+                letter = mixColor(letter, onSurfaceStrong(), 0.6f);
+            }
+            std::string const glyph(1, text[static_cast<size_t>(index)]);
+            auto* main = makeLabel(glyph, true, scale, letter);
+            if (!main) {
+                continue;
+            }
+            float const width = main->getContentSize().width * main->getScale();
+            float const centerX = cursor + width * 0.5f;
+            main->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            main->setPosition(CCPoint(centerX, 0.f));
+            if (auto* wideGlow = makeLabel(glyph, true, scale * 1.18f, accentColor())) {
+                wideGlow->setAnchorPoint(CCPoint(0.5f, 0.5f));
+                wideGlow->setPosition(CCPoint(centerX, 0.f));
+                wideGlow->setOpacity(26);
+                root->addChild(wideGlow, 0);
+            }
+            if (auto* nearGlow = makeLabel(glyph, true, scale * 1.08f, accentColor())) {
+                nearGlow->setAnchorPoint(CCPoint(0.5f, 0.5f));
+                nearGlow->setPosition(CCPoint(centerX, 0.f));
+                nearGlow->setOpacity(64);
+                root->addChild(nearGlow, 1);
+            }
+            root->addChild(main, 2);
+            cursor += width;
+        }
+        return root;
     }
 
     void drawCurvedRect(CCDrawNode* node, CCRect const& rect, float radius, ccColor4F fill, ccColor4F border, float borderWidth) {
@@ -2602,9 +2704,6 @@ finally {
         addArc(right - radius, top - radius, 0.f, PI * 0.5f);
         addArc(left + radius, top - radius, PI * 0.5f, PI);
         addArc(left + radius, bottom + radius, PI, PI * 1.5f);
-        // consecutive arcs share a point whenever the straight edge between them
-        // has zero length (pill shapes). cocos2d turns those duplicate points
-        // into spikes when it builds the border, so drop them first
         CCPoint filtered[4 * (SEGMENTS + 1)];
         int filteredCount = 0;
         auto isNear = [](CCPoint const& first, CCPoint const& second) {
@@ -2644,7 +2743,6 @@ finally {
         return CCRect(TICK_VALUE_X, tickRowY(row) - TICK_BTN_H * 0.5f, TICK_VALUE_W, TICK_BTN_H);
     }
 
-    // draggable hit area over the timing bar of a custom stage
     CCRect tickSliderRect(int row) {
         return CCRect(STAGE_BAR_X - 10.f, tickRowY(row) - 15.f, STAGE_BAR_WIDTH + 20.f, 30.f);
     }
@@ -2697,9 +2795,44 @@ finally {
         return names[index];
     }
 
-    // small credits button, pinned to the top right of the settings card
+    CCRect logExpandRect() {
+        return CCRect(LOG_EXPAND_X, COPY_Y, LOG_EXPAND_WIDTH, LOG_EXPAND_HEIGHT);
+    }
+
+    CCRect logPaneRect() {
+        return CCRect(LOG_X + 8.f, LOG_PANE_BOTTOM, LOG_WIDTH - 16.f, LOG_PANE_TOP - LOG_PANE_BOTTOM);
+    }
+
+    CCRect logViewCardRect() {
+        return CCRect(LOG_VIEW_CARD_X, LOG_VIEW_CARD_Y, LOG_VIEW_CARD_WIDTH, LOG_VIEW_CARD_HEIGHT);
+    }
+
+    CCRect logViewCloseRect() {
+        auto card = logViewCardRect();
+        return CCRect(card.getMaxX() - 42.f, card.getMaxY() - 42.f, 28.f, 28.f);
+    }
+
+    CCRect logViewListRect() {
+        auto card = logViewCardRect();
+        return CCRect(card.getMinX() + 8.f, card.getMinY() + 10.f, card.size.width - 16.f, card.size.height - 78.f);
+    }
+
     CCRect creditsRect() {
-        return CCRect(CONTENT_RIGHT - 20.f - 62.f, LOG_HEADER_Y - 12.f, 62.f, 24.f);
+        return CCRect(CONTENT_RIGHT - 20.f - 62.f, SETTINGS_HEADER_Y - 12.f, 62.f, 24.f);
+    }
+
+    CCRect creditsCardRect() {
+        return CCRect(
+            (DECK_WIDTH - CREDITS_CARD_WIDTH) * 0.5f,
+            (DECK_HEIGHT - CREDITS_CARD_HEIGHT) * 0.5f,
+            CREDITS_CARD_WIDTH,
+            CREDITS_CARD_HEIGHT
+        );
+    }
+
+    CCRect creditsCloseRect() {
+        auto card = creditsCardRect();
+        return CCRect(card.getMaxX() - 46.f, card.getMaxY() - 46.f, 30.f, 30.f);
     }
 
     CCRect configButtonRect(int index) {
@@ -2709,12 +2842,36 @@ finally {
     }
 
     CCRect swatchRect(int index) {
-        return CCRect(SWATCH_X + static_cast<float>(index) * (SWATCH_WIDTH + SWATCH_GAP), SWATCH_Y, SWATCH_WIDTH, SWATCH_HEIGHT);
+        int const row = index / THEMES_PER_ROW;
+        int const column = index % THEMES_PER_ROW;
+        return CCRect(
+            SWATCH_X + static_cast<float>(column) * (SWATCH_WIDTH + SWATCH_GAP),
+            SWATCH_Y - static_cast<float>(row) * (SWATCH_HEIGHT + SWATCH_ROW_GAP),
+            SWATCH_WIDTH,
+            SWATCH_HEIGHT
+        );
     }
 
-    CCRect settingsRowRect(int row) {
-        float y = (row >= 0 && row < 2) ? SETTINGS_ROW_Y[row] : SETTINGS_ROW_Y[0];
-        return CCRect(CONTENT_X + 16.f, y - 22.f, CONTENT_WIDTH - 32.f, 44.f);
+    CCRect settingsCellRect(int index) {
+        float const innerWidth = CONTENT_WIDTH - 32.f;
+        if (index == 0) {
+            return CCRect(CONTENT_X + 16.f, SETTINGS_ROW_Y[0] - 22.f, innerWidth, 44.f);
+        }
+        int const column = index - 1;
+        return CCRect(
+            CONTENT_X + 16.f + static_cast<float>(column) * (SETTINGS_CELL_WIDTH + SETTINGS_CELL_GAP),
+            SETTINGS_ROW_Y[1] - 22.f,
+            SETTINGS_CELL_WIDTH,
+            44.f
+        );
+    }
+
+    CCRect settingsStepRect(int cell, bool plus) {
+        auto rect = settingsCellRect(cell);
+        float const size = 26.f;
+        float const right = rect.getMaxX() - 14.f;
+        float x = plus ? right - size : right - size * 2.f - 8.f;
+        return CCRect(x, rect.getMidY() - size * 0.5f, size, size);
     }
 
     char const* stageName(int index) {
@@ -2766,17 +2923,24 @@ finally {
         auto* background = makeDrawNode();
         float radius = std::min(rect.size.height * 0.25f, 7.f);
         if (isFilled) {
-            drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(accentColor(), 238), color4(255, 255, 255, 44), 1.f);
+            drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(accentColor(), 238), panelTint(44), 1.f);
         }
         else if (isTinted) {
             drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(accentColor(), 30), color4(accentColor(), 95), 1.f);
         }
         else {
-            drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, color4(255, 255, 255, 10), color4(255, 255, 255, 30), 1.f);
+            drawCurvedRect(background, CCRect(0.f, 0.f, rect.size.width, rect.size.height), radius, panelTint(10), panelTint(30), 1.f);
         }
         button->addChild(background);
 
-        if (auto* label = makeLabel(text, useDisplayFont, fontScale, isFilled || isTinted ? secondaryColor() : softTextColor())) {
+        ccColor3B labelTint = softTextColor();
+        if (isFilled) {
+            labelTint = secondaryColor();
+        }
+        else if (isTinted) {
+            labelTint = lightSurface() ? accentColor() : secondaryColor();
+        }
+        if (auto* label = makeLabel(text, useDisplayFont, fontScale, labelTint)) {
             label->setPosition(CCPoint(rect.size.width * 0.5f, rect.size.height * 0.5f));
             button->addChild(label);
         }
@@ -2798,8 +2962,8 @@ finally {
             background,
             CCRect(0.f, 0.f, rect.size.width, rect.size.height),
             6.f,
-            color4(255, 255, 255, 6),
-            color4(255, 255, 255, 18),
+            panelTint(6),
+            panelTint(18),
             1.f
         );
 
@@ -2847,6 +3011,55 @@ finally {
         return {};
     }
 
+    void renderLogRows(
+        CCLabelBMFont* const* labels,
+        int rowCount,
+        std::vector<std::string> const& logs,
+        int scroll,
+        float maxWidth,
+        float baseScale,
+        bool markLatest
+    ) {
+        int const newest = static_cast<int>(logs.size()) - 1 - scroll;
+        for (int row = 0; row < rowCount; ++row) {
+            auto* label = labels[row];
+            if (!label) {
+                continue;
+            }
+            int const entry = newest - (rowCount - 1 - row);
+            if (entry < 0 || entry >= static_cast<int>(logs.size())) {
+                label->setString("");
+                continue;
+            }
+            std::string text = singleLineLog(logs[static_cast<size_t>(entry)]);
+            bool const isLatest = markLatest && scroll <= 0 && row == rowCount - 1;
+            text = (isLatest ? "> " : "  ") + text;
+            fitLogLine(label, text, maxWidth);
+            bool lowPriority = text.find("host os") != std::string::npos
+                || text.find("loader") != std::string::npos
+                || text.find("version check") != std::string::npos;
+            label->setScale(isLatest ? baseScale : (lowPriority ? baseScale * 0.88f : baseScale * 0.97f));
+            label->setColor(isLatest ? (lightSurface() ? accentColor() : secondaryColor()) : logTextColor());
+            label->setOpacity(isLatest ? 255 : (lowPriority ? 150 : 232));
+        }
+    }
+
+    void drawLogScrollbar(CCDrawNode* node, CCRect const& track, int total, int visible, float scroll) {
+        if (!node || total <= visible || track.size.height <= 4.f) {
+            return;
+        }
+        float const top = track.getMaxY();
+        float const bottom = track.getMinY();
+        float const height = top - bottom;
+        float const thumbH = std::max(14.f, height * static_cast<float>(visible) / static_cast<float>(total));
+        int const maxScroll = std::max(0, total - visible);
+        float const progress = maxScroll > 0 ? std::clamp(scroll / static_cast<float>(maxScroll), 0.f, 1.f) : 0.f;
+        float const thumbTop = top - (height - thumbH) * (1.f - progress);
+        float const x = track.getMidX();
+        node->drawSegment(CCPoint(x, bottom), CCPoint(x, top), 3.f, panelTint(20));
+        node->drawSegment(CCPoint(x, thumbTop - thumbH), CCPoint(x, thumbTop), 3.f, color4(accentColor(), 150));
+    }
+
     template <class T>
     T* findDescendant(CCNode* node) {
         if (!node) {
@@ -2866,11 +3079,9 @@ finally {
         return nullptr;
     }
 
-    // ---- first-open tutorial ------------------------------------------------
     constexpr char const* TUTORIAL_DONE_KEY = "tutorial-done";
     constexpr float TUTORIAL_CARD_W = 410.f;
 
-    // things the tour can point at
     constexpr int TF_NONE = -1;
     constexpr int TF_LOGO = 0;
     constexpr int TF_HEADER = 1;
@@ -2888,12 +3099,12 @@ finally {
 
     struct TutorialStep {
         std::string title;
-        int tab; // tab to show right away, -1 keeps the current one
+        int tab;
         std::vector<std::string> lines;
-        int cursor;  // where the cursor flies to (TF_NONE hides it)
-        bool tap;    // true: the cursor taps what it points at
-        int focus;   // what stays lit once the cursor arrives
-        int cursor2; // optional second stop after a short pause
+        int cursor;
+        bool tap;
+        int focus;
+        int cursor2;
     };
 
     std::vector<TutorialStep> tutorialSteps() {
@@ -2940,7 +3151,6 @@ finally {
         steps.push_back({ "settings tab", -1, {
             "pick a theme to change the panel colors.",
             "glow turns the soft glow behind the panel on or off.",
-            "terminal shows or hides the terminal button (pc only).",
             "credits (top right) shows who helped make this.",
             "export copies your tuning as json, import loads it back.",
         }, TF_TAB2, true, TF_SWATCHES, TF_CONFIG });
@@ -2955,7 +3165,6 @@ finally {
         return 142.f + 22.f * static_cast<float>(lineCount);
     }
 
-    // card-local buttons, origin is the card's bottom left corner
     CCRect tutorialSkipRect(CCPoint const& origin) {
         return CCRect(origin.x + 22.f, origin.y + 16.f, 100.f, 32.f);
     }
@@ -2985,9 +3194,10 @@ finally {
                 STAGE_BAR_WIDTH + 14.f, STAGE_TIMING_ALL_Y - STAGE_TIMING_WAVE_Y + 40.f
             );
             case TF_SWATCHES: return CCRect(
-                SWATCH_X, SWATCH_Y,
-                static_cast<float>(THEME_COUNT) * SWATCH_WIDTH + static_cast<float>(THEME_COUNT - 1) * SWATCH_GAP,
-                SWATCH_HEIGHT
+                SWATCH_X,
+                SWATCH_Y - static_cast<float>(THEME_ROW_COUNT - 1) * (SWATCH_HEIGHT + SWATCH_ROW_GAP),
+                static_cast<float>(THEMES_PER_ROW) * SWATCH_WIDTH + static_cast<float>(THEMES_PER_ROW - 1) * SWATCH_GAP,
+                static_cast<float>(THEME_ROW_COUNT) * SWATCH_HEIGHT + static_cast<float>(THEME_ROW_COUNT - 1) * SWATCH_ROW_GAP
             );
             case TF_CONFIG: {
                 auto first = configButtonRect(0);
@@ -3010,7 +3220,6 @@ finally {
         return (width > 0.f && height > 0.f) ? width * height : 0.f;
     }
 
-    // picks the spot for the tour card that covers the least of what is lit
     CCPoint tutorialPickCardOrigin(float height, std::vector<CCRect> const& avoid, bool centered) {
         float const xs[3] = { (DECK_WIDTH - TUTORIAL_CARD_W) * 0.5f, 12.f, DECK_WIDTH - 12.f - TUTORIAL_CARD_W };
         if (centered) {
@@ -3053,6 +3262,7 @@ finally {
         void ccTouchEnded(CCTouch* touch, CCEvent* event) override;
         void ccTouchCancelled(CCTouch* touch, CCEvent* event) override;
         void registerWithTouchDispatcher() override;
+        void scrollWheel(float y, float x) override;
 
     private:
         enum class HitTarget {
@@ -3062,12 +3272,15 @@ finally {
             StageBack,
             StageForward,
             CopyLog,
+            LogExpand,
+            LogPane,
             Terminal,
             StageSlot,
             Tab,
             Chip,
             Theme,
             SettingsRow,
+            SettingsStep,
             ImportConfig,
             ExportConfig,
             ReplayTutorial,
@@ -3088,6 +3301,10 @@ finally {
         void applyTab();
         void applyChip();
         void applyTheme(int index);
+        void buildCreditsLayer();
+        void closeCreditsLayer();
+        void buildLogLayer();
+        void closeLogLayer();
         void exportConfig();
         void importConfig();
         void updateModeIcons();
@@ -3162,7 +3379,6 @@ finally {
         CCLabelBMFont* m_tickValueLabels[2] = {};
         CCNode* m_tutorialLayer = nullptr;
         int m_tutorialStep = -1;
-        // tour animation state
         CCDrawNode* m_tutShade = nullptr;
         CCDrawNode* m_tutFx = nullptr;
         CCDrawNode* m_tutCursor = nullptr;
@@ -3179,7 +3395,7 @@ finally {
         float m_tutProgShown = 0.f;
         float m_tutRippleT = -1.f;
         float m_tutPhaseTime = 0.f;
-        int m_tutPhase = 2; // 0 flying, 1 tapping, 2 settled
+        int m_tutPhase = 2;
         int m_tutKindNow = -1;
         int m_tutFocusNow = -1;
         int m_tutKind2 = -1;
@@ -3187,7 +3403,6 @@ finally {
         bool m_tutTapNow = false;
         bool m_tutActionDone = false;
         bool m_tutClosing = false;
-        // ui animation state
         float m_tabIndX = -1.f;
         float m_tabIndTarget = 0.f;
         int m_lastAppliedTab = -1;
@@ -3202,7 +3417,8 @@ finally {
         CCLabelBMFont* m_customAddLabel = nullptr;
         CCLabelBMFont* m_customRemoveLabel = nullptr;
         CCLabelBMFont* m_settingsHeaderLabel = nullptr;
-        CCLabelBMFont* m_settingsValueLabels[2] = {};
+        CCLabelBMFont* m_settingsValueLabels[SETTINGS_CELL_COUNT] = {};
+        CCLabelBMFont* m_settingsStepLabels[4] = {};
         CCLabelBMFont* m_settingsHintLabel = nullptr;
         CCLabelBMFont* m_settingsThemeLabels[THEME_COUNT] = {};
         CCDrawNode* m_settingsBar = nullptr;
@@ -3219,6 +3435,24 @@ finally {
         CCNode* m_exportButton = nullptr;
         CCNode* m_tutorialButton = nullptr;
         CCNode* m_creditsButton = nullptr;
+        CCNode* m_creditsLayer = nullptr;
+        CCNode* m_logLayer = nullptr;
+        CCNode* m_logExpandButton = nullptr;
+        CCLabelBMFont* m_logViewLines[LOG_VIEW_LINE_COUNT] = {};
+        CCLabelBMFont* m_logViewTitleLabel = nullptr;
+        CCLabelBMFont* m_logViewCountLabel = nullptr;
+        CCDrawNode* m_logViewBar = nullptr;
+        float m_logScroll = 0.f;
+        float m_logViewScroll = 0.f;
+        size_t m_logLastCount = 0;
+        bool m_logDragging = false;
+        bool m_logDragMoved = false;
+        float m_logDragStartY = 0.f;
+        float m_logDragBase = 0.f;
+        bool m_logViewDragging = false;
+        bool m_logViewDragMoved = false;
+        float m_logViewDragStartY = 0.f;
+        float m_logViewDragBase = 0.f;
         int m_activeTab = 0;
         CCDrawNode* m_chipBar = nullptr;
         CCLabelBMFont* m_chipLabels[CHIP_COUNT] = {};
@@ -3280,12 +3514,10 @@ finally {
         m_launcher->setContentSize(CCSize(68.f, 68.f));
         m_launcher->setAnchorPoint(CCPoint(0.5f, 0.5f));
 
-        auto* launcherHalo = makeDrawNode();
-        launcherHalo->drawCircle(CCPoint(34.f, 34.f), 33.f, color4(accentColor(), 13), 0.f, color4(0, 0, 0, 0), 48);
-        m_launcher->addChild(launcherHalo);
-        if (auto* launcherLogo = makeLogoMark(56.f)) {
-            launcherLogo->setPosition(CCPoint(34.f, 34.f));
-            m_launcher->addChild(launcherLogo, 1);
+        auto* launcherGlow = makeGlowingLogo(56.f);
+        if (launcherGlow) {
+            launcherGlow->setPosition(CCPoint(34.f, 34.f));
+            m_launcher->addChild(launcherGlow);
         }
         m_launcher->setVisible(false);
         addChild(m_launcher, 2);
@@ -3298,8 +3530,6 @@ finally {
     void AfterflowOverlay::buildDeck() {
         ccColor4F none = color4(0, 0, 0, 0);
 
-        // rebuildDeck() frees every child, so every member pointer must be
-        // reset here or applyTab()/refresh() would touch freed memory.
         m_shell = nullptr;
         m_stageTrack = nullptr;
         m_logHighlight = nullptr;
@@ -3341,6 +3571,13 @@ finally {
         m_exportButton = nullptr;
         m_tutorialButton = nullptr;
         m_creditsButton = nullptr;
+        m_creditsLayer = nullptr;
+        m_logExpandButton = nullptr;
+        m_logLayer = nullptr;
+        m_logViewTitleLabel = nullptr;
+        m_logViewCountLabel = nullptr;
+        m_logViewBar = nullptr;
+        for (int index = 0; index < LOG_VIEW_LINE_COUNT; ++index) { m_logViewLines[index] = nullptr; }
         m_modeIcons.clear();
         for (int index = 0; index < LOG_LINE_COUNT; ++index) { m_activityLines[index] = nullptr; }
         for (int index = 0; index < STAGE_MAX_STAGES; ++index) { m_stageNameLabels[index] = nullptr; }
@@ -3374,7 +3611,8 @@ finally {
             m_toolsDescLabels[index] = nullptr;
         }
         for (int index = 0; index < THEME_COUNT; ++index) { m_settingsThemeLabels[index] = nullptr; }
-        for (int index = 0; index < 2; ++index) { m_settingsValueLabels[index] = nullptr; }
+        for (int index = 0; index < SETTINGS_CELL_COUNT; ++index) { m_settingsValueLabels[index] = nullptr; }
+        for (int index = 0; index < 4; ++index) { m_settingsStepLabels[index] = nullptr; }
         ccColor3B surface = getUISurfaceColor();
         ccColor3B shellTint = color3(
             static_cast<int>(surface.r * 0.88f),
@@ -3401,8 +3639,8 @@ finally {
         m_shell = makeDrawNode();
         m_deck->addChild(m_shell, 1);
         drawCurvedRect(m_shell, CCRect(-12.f, -22.f, DECK_WIDTH + 24.f, DECK_HEIGHT + 22.f), DECK_RADIUS + 6.f, color4(0, 0, 0, 72), none, 0.f);
-        drawCurvedRect(m_shell, CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT), DECK_RADIUS, color4(shellTint, 252), color4(255, 255, 255, 26), 1.f);
-        drawCurvedRect(m_shell, CCRect(CONTENT_X, CARD_BOTTOM, CONTENT_WIDTH, CARD_HEIGHT), CARD_RADIUS, color4(surface, 255), color4(255, 255, 255, 18), 1.f);
+        drawCurvedRect(m_shell, CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT), DECK_RADIUS, color4(shellTint, 252), panelTint(26), 1.f);
+        drawCurvedRect(m_shell, CCRect(CONTENT_X, CARD_BOTTOM, CONTENT_WIDTH, CARD_HEIGHT), CARD_RADIUS, color4(surface, 255), panelTint(18), 1.f);
 
         m_tabBar = makeDrawNode();
         m_deck->addChild(m_tabBar, 2);
@@ -3416,20 +3654,20 @@ finally {
             }
         }
 
-        if (auto* mark = makeLogoMark(34.f)) {
+        if (auto* mark = makeGlowingLogo(34.f)) {
             mark->setPosition(CCPoint(MARGIN + 17.f, HEADER_Y));
             m_deck->addChild(mark, 3);
         }
 
-        auto* brandName = makeLabel("afterflow", true, 0.84f, color3(242, 243, 248));
-        brandName->setAnchorPoint(CCPoint(0.f, 0.5f));
-        brandName->setPosition(CCPoint(MARGIN + 42.f, HEADER_Y));
-        m_deck->addChild(brandName, 3);
+        if (auto* brandName = makeBrandWordmark("afterflow", 0.84f)) {
+            brandName->setPosition(CCPoint(MARGIN + 42.f, HEADER_Y));
+            m_deck->addChild(brandName, 3);
+        }
 
         m_statusBeacon = makeDrawNode();
         m_deck->addChild(m_statusBeacon, 2);
 
-        m_statusLabel = makeLabel("buffer on", false, 0.68f, secondaryColor());
+        m_statusLabel = makeLabel("buffer on", false, 0.68f, lightSurface() ? softTextColor() : secondaryColor());
         m_statusLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
         m_statusLabel->setPosition(CCPoint(CONTENT_RIGHT - 170.f, HEADER_Y));
         m_deck->addChild(m_statusLabel, 3);
@@ -3443,7 +3681,6 @@ finally {
             0.62f
         );
 
-        // ---- log pane ---------------------------------------------------------
         m_logHighlight = makeDrawNode();
         m_deck->addChild(m_logHighlight, 1);
 
@@ -3468,6 +3705,13 @@ finally {
         );
         m_copyLabel = m_copyButton->getChildByType<CCLabelBMFont>(0);
 
+        m_logExpandButton = makeDeckButton(m_deck, logExpandRect(), "expand", false, false, 0.44f);
+        if (m_logExpandButton) {
+            if (auto* label = m_logExpandButton->getChildByType<CCLabelBMFont>(0)) {
+                fitLabelToWidth(label, LOG_EXPAND_WIDTH - 16.f);
+            }
+        }
+
         for (int index = 0; index < LOG_LINE_COUNT; ++index) {
             auto* line = makeLabel("", false, 0.96f, logTextColor());
             line->setAnchorPoint(CCPoint(0.f, 0.5f));
@@ -3476,8 +3720,7 @@ finally {
             m_activityLines[index] = line;
         }
 
-        // ---- stage pane -------------------------------------------------------
-        m_stageNameLabel = makeLabel("tight", true, 0.88f, color3(240, 241, 246));
+        m_stageNameLabel = makeLabel("tight", true, 0.88f, onSurfaceStrong());
         m_stageNameLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
         m_stageNameLabel->setPosition(CCPoint(LOG_X + 22.f, STAGE_NAME_Y));
         m_deck->addChild(m_stageNameLabel, 3);
@@ -3529,7 +3772,7 @@ finally {
 
         for (int row = 0; row < 2; ++row) {
             auto valueRect = tickValueRect(row);
-            if (auto* valueLabel = makeLabel("0t", true, 0.62f, color3(240, 241, 246))) {
+            if (auto* valueLabel = makeLabel("0t", true, 0.62f, onSurfaceStrong())) {
                 valueLabel->setPosition(CCPoint(valueRect.getMidX(), valueRect.getMidY()));
                 m_deck->addChild(valueLabel, 3);
                 m_tickValueLabels[row] = valueLabel;
@@ -3571,23 +3814,34 @@ finally {
             m_customRemoveLabel = removeLabel;
         }
 
-        // ---- settings pane ----------------------------------------------------
         m_settingsHeaderLabel = makeLabel("appearance", true, 0.62f, logTextColor());
         m_settingsHeaderLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
-        m_settingsHeaderLabel->setPosition(CCPoint(LOG_X + 22.f, LOG_HEADER_Y));
+        m_settingsHeaderLabel->setPosition(CCPoint(LOG_X + 22.f, SETTINGS_HEADER_Y));
         m_deck->addChild(m_settingsHeaderLabel, 3);
 
         m_settingsBar = makeDrawNode();
         m_deck->addChild(m_settingsBar, 1);
-        for (int row = 0; row < 2; ++row) {
+        for (int cell = 0; cell < SETTINGS_CELL_COUNT; ++cell) {
             drawCurvedRect(
                 m_settingsBar,
-                settingsRowRect(row),
+                settingsCellRect(cell),
                 7.f,
-                color4(255, 255, 255, 8),
-                color4(255, 255, 255, 22),
+                panelTint(8),
+                panelTint(22),
                 1.f
             );
+        }
+        for (int cell = 1; cell < SETTINGS_CELL_COUNT; ++cell) {
+            for (int which = 0; which < 2; ++which) {
+                drawCurvedRect(
+                    m_settingsBar,
+                    settingsStepRect(cell, which == 1),
+                    6.f,
+                    color4(accentColor(), 26),
+                    color4(accentColor(), 90),
+                    1.f
+                );
+            }
         }
 
         m_themeSwatches = makeDrawNode();
@@ -3606,11 +3860,11 @@ finally {
                 rect,
                 6.f,
                 color4(themeSurface, 255),
-                selected ? color4(accentColor(), 235) : color4(255, 255, 255, 34),
+                selected ? color4(accentColor(), 235) : panelTint(34),
                 selected ? 2.f : 1.f
             );
             m_themeSwatches->drawCircle(
-                CCPoint(rect.getMinX() + 17.f, rect.getMidY()),
+                CCPoint(rect.getMinX() + 14.f, rect.getMidY()),
                 6.f,
                 color4(themePrimary, 255),
                 0.f,
@@ -3619,20 +3873,31 @@ finally {
             );
             if (auto* swatchLabel = makeLabel(THEMES[index].name, false, 0.48f, themeText)) {
                 swatchLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
-                swatchLabel->setPosition(CCPoint(rect.getMinX() + 29.f, rect.getMidY()));
+                swatchLabel->setPosition(CCPoint(rect.getMinX() + 24.f, rect.getMidY()));
+                fitLabelToWidth(swatchLabel, rect.size.width - 30.f);
                 m_deck->addChild(swatchLabel, 3);
                 m_settingsThemeLabels[index] = swatchLabel;
             }
         }
 
-        char const* settingsNames[2] = { "glow", "terminal" };
-        for (int row = 0; row < 2; ++row) {
-            auto rect = settingsRowRect(row);
-            if (auto* name = makeLabel(settingsNames[row], false, 0.72f, softTextColor())) {
+        char const* settingsNames[SETTINGS_CELL_COUNT] = { "glow", "panel", "font" };
+        for (int cell = 0; cell < SETTINGS_CELL_COUNT; ++cell) {
+            auto rect = settingsCellRect(cell);
+            if (auto* name = makeLabel(settingsNames[cell], false, 0.72f, softTextColor())) {
                 name->setAnchorPoint(CCPoint(0.f, 0.5f));
                 name->setPosition(CCPoint(rect.getMinX() + 18.f, rect.getMidY()));
                 m_deck->addChild(name, 3);
-                m_settingsValueLabels[row] = name;
+                m_settingsValueLabels[cell] = name;
+            }
+        }
+        for (int cell = 1; cell < SETTINGS_CELL_COUNT; ++cell) {
+            for (int which = 0; which < 2; ++which) {
+                auto rect = settingsStepRect(cell, which == 1);
+                if (auto* glyph = makeLabel(which == 1 ? "+" : "-", false, 0.62f, accentColor())) {
+                    glyph->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
+                    m_deck->addChild(glyph, 3);
+                    m_settingsStepLabels[(cell - 1) * 2 + which] = glyph;
+                }
             }
         }
 
@@ -3646,7 +3911,6 @@ finally {
         m_deck->addChild(m_configStatusLabel, 3);
 
         {
-            // small yellow credits button, always pinned top right of settings
             auto rect = creditsRect();
             auto* button = CCNode::create();
             button->setContentSize(CCSize(rect.size.width, rect.size.height));
@@ -3676,6 +3940,8 @@ finally {
         endTickEdit();
         m_pressedTarget = HitTarget::None;
         m_pressedNode = nullptr;
+        m_creditsLayer = nullptr;
+        m_logLayer = nullptr;
         m_deck->removeAllChildrenWithCleanup(true);
         buildDeck();
         layout();
@@ -3759,6 +4025,271 @@ finally {
         rebuildDeck();
     }
 
+    void AfterflowOverlay::buildCreditsLayer() {
+        if (!m_deck || m_creditsLayer) {
+            return;
+        }
+        auto const card = creditsCardRect();
+        float const width = card.size.width;
+        float const height = card.size.height;
+
+        m_creditsLayer = CCNode::create();
+        m_creditsLayer->setContentSize(CCSize(DECK_WIDTH, DECK_HEIGHT));
+        m_deck->addChild(m_creditsLayer, 40);
+
+        if (auto* shade = makeDrawNode()) {
+            shade->drawRect(
+                CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT),
+                color4(4, 5, 8, 196),
+                0.f,
+                color4(0, 0, 0, 0)
+            );
+            m_creditsLayer->addChild(shade, 0);
+        }
+
+        auto* sheet = CCNode::create();
+        sheet->setPosition(card.origin);
+        m_creditsLayer->addChild(sheet, 1);
+
+        if (auto* glow = makeDrawNode()) {
+            drawCurvedRect(
+                glow,
+                CCRect(-5.f, -5.f, width + 10.f, height + 10.f),
+                18.f,
+                color4(accentColor(), 18),
+                color4(0, 0, 0, 0),
+                0.f
+            );
+            sheet->addChild(glow, 0);
+        }
+
+        if (auto* back = makeDrawNode()) {
+            drawCurvedRect(
+                back,
+                CCRect(0.f, 0.f, width, height),
+                14.f,
+                color4(getUISurfaceColor(), 252),
+                color4(accentColor(), 96),
+                1.f
+            );
+            back->drawSegment(
+                CCPoint(20.f, height - 92.f),
+                CCPoint(width - 20.f, height - 92.f),
+                1.f,
+                panelTint(24)
+            );
+            sheet->addChild(back, 1);
+        }
+
+        if (auto* title = makeLabel("credits", true, 0.88f, accentColor())) {
+            title->setAnchorPoint(CCPoint(0.f, 0.5f));
+            title->setPosition(CCPoint(22.f, height - 38.f));
+            sheet->addChild(title, 2);
+        }
+        if (auto* subtitle = makeLabel("afterflow - who put it together", false, 0.44f, faintTextColor())) {
+            subtitle->setAnchorPoint(CCPoint(0.f, 0.5f));
+            subtitle->setPosition(CCPoint(22.f, height - 64.f));
+            sheet->addChild(subtitle, 2);
+        }
+
+        {
+            auto close = creditsCloseRect();
+            CCPoint local(close.getMinX() - card.getMinX(), close.getMinY() - card.getMinY());
+            auto* closeBack = makeDrawNode();
+            drawCurvedRect(closeBack, CCRect(0.f, 0.f, close.size.width, close.size.height), 6.f,
+                panelTint(10), panelTint(34), 1.f);
+            closeBack->setPosition(local);
+            sheet->addChild(closeBack, 2);
+            if (auto* x = makeLabel("x", false, 0.58f, softTextColor())) {
+                x->setPosition(CCPoint(close.size.width * 0.5f, close.size.height * 0.5f));
+                closeBack->addChild(x);
+            }
+        }
+
+        struct CreditRow {
+            char const* badge;
+            char const* name;
+            char const* role;
+        };
+        CreditRow const rows[3] = {
+            { "sv", "sevend", "creator of afterflow + original ui" },
+            { "sa", "Sir Abraham Creakstopher the second", "baller.w21 - mobile support and a ton of stuff" },
+            { "lg", "Legion", "nyxx6_1 - a ton of ideas" },
+        };
+        float const rowX = 20.f;
+        float const rowW = width - 40.f;
+        float const rowH = 54.f;
+        float const rowGap = 8.f;
+        float const rowBottom = 24.f;
+        for (int index = 0; index < 3; ++index) {
+            float const y = rowBottom + static_cast<float>(2 - index) * (rowH + rowGap);
+            CCRect const rect(rowX, y, rowW, rowH);
+            auto* rowBack = makeDrawNode();
+            if (!rowBack) {
+                continue;
+            }
+            drawCurvedRect(rowBack, rect, 9.f, panelTint(8), panelTint(22), 1.f);
+            CCPoint const badge(rect.getMinX() + 30.f, rect.getMidY());
+            rowBack->drawCircle(badge, 13.f, color4(accentColor(), 46), 1.f, color4(accentColor(), 190), 26);
+            rowBack->drawSegment(
+                CCPoint(rect.getMinX() + 0.5f, rect.getMinY() + 12.f),
+                CCPoint(rect.getMinX() + 0.5f, rect.getMaxY() - 12.f),
+                2.f,
+                color4(accentColor(), 170)
+            );
+            sheet->addChild(rowBack, 2);
+
+            if (auto* badgeLabel = makeLabel(rows[index].badge, false, 0.42f, accentColor())) {
+                badgeLabel->setPosition(badge);
+                sheet->addChild(badgeLabel, 3);
+            }
+            if (auto* name = makeLabel(rows[index].name, false, 0.6f, logTextColor())) {
+                name->setAnchorPoint(CCPoint(0.f, 0.5f));
+                name->setPosition(CCPoint(rect.getMinX() + 56.f, rect.getMidY() + 9.f));
+                fitLabelToWidth(name, rect.size.width - 76.f);
+                sheet->addChild(name, 3);
+            }
+            if (auto* role = makeLabel(rows[index].role, false, 0.4f, softTextColor())) {
+                role->setAnchorPoint(CCPoint(0.f, 0.5f));
+                role->setPosition(CCPoint(rect.getMinX() + 56.f, rect.getMidY() - 10.f));
+                fitLabelToWidth(role, rect.size.width - 76.f);
+                sheet->addChild(role, 3);
+            }
+        }
+    }
+
+    void AfterflowOverlay::closeCreditsLayer() {
+        if (m_creditsLayer) {
+            m_creditsLayer->removeFromParentAndCleanup(true);
+            m_creditsLayer = nullptr;
+        }
+    }
+
+    void AfterflowOverlay::buildLogLayer() {
+        if (!m_deck || m_logLayer) {
+            return;
+        }
+        auto const card = logViewCardRect();
+        float const width = card.size.width;
+        float const height = card.size.height;
+
+        m_logViewScroll = 0.f;
+        m_logLayer = CCNode::create();
+        m_logLayer->setContentSize(CCSize(DECK_WIDTH, DECK_HEIGHT));
+        m_deck->addChild(m_logLayer, 40);
+
+        if (auto* shade = makeDrawNode()) {
+            shade->drawRect(
+                CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT),
+                color4(4, 5, 8, 196),
+                0.f,
+                color4(0, 0, 0, 0)
+            );
+            m_logLayer->addChild(shade, 0);
+        }
+
+        auto* sheet = CCNode::create();
+        sheet->setPosition(card.origin);
+        m_logLayer->addChild(sheet, 1);
+
+        if (auto* glow = makeDrawNode()) {
+            drawCurvedRect(
+                glow,
+                CCRect(-5.f, -5.f, width + 10.f, height + 10.f),
+                18.f,
+                color4(accentColor(), 18),
+                color4(0, 0, 0, 0),
+                0.f
+            );
+            sheet->addChild(glow, 0);
+        }
+
+        if (auto* back = makeDrawNode()) {
+            drawCurvedRect(
+                back,
+                CCRect(0.f, 0.f, width, height),
+                14.f,
+                color4(getUISurfaceColor(), 252),
+                color4(accentColor(), 96),
+                1.f
+            );
+            back->drawSegment(
+                CCPoint(20.f, height - 56.f),
+                CCPoint(width - 20.f, height - 56.f),
+                1.f,
+                panelTint(24)
+            );
+            sheet->addChild(back, 1);
+        }
+
+        m_logViewTitleLabel = makeLabel("activity log", true, 0.82f, accentColor());
+        if (m_logViewTitleLabel) {
+            m_logViewTitleLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
+            m_logViewTitleLabel->setPosition(CCPoint(24.f, height - 32.f));
+            sheet->addChild(m_logViewTitleLabel, 2);
+        }
+
+        m_logViewCountLabel = makeLabel("0 events", false, 0.52f, faintTextColor());
+        if (m_logViewCountLabel) {
+            m_logViewCountLabel->setAnchorPoint(CCPoint(1.f, 0.5f));
+            m_logViewCountLabel->setPosition(CCPoint(width - 60.f, height - 32.f));
+            fitLabelToWidth(m_logViewCountLabel, 220.f);
+            sheet->addChild(m_logViewCountLabel, 2);
+        }
+
+        {
+            auto close = logViewCloseRect();
+            CCPoint local(close.getMinX() - card.getMinX(), close.getMinY() - card.getMinY());
+            auto* closeBack = makeDrawNode();
+            drawCurvedRect(closeBack, CCRect(0.f, 0.f, close.size.width, close.size.height), 6.f,
+                panelTint(10), panelTint(34), 1.f);
+            closeBack->setPosition(local);
+            sheet->addChild(closeBack, 2);
+            if (auto* x = makeLabel("x", false, 0.58f, softTextColor())) {
+                x->setPosition(CCPoint(close.size.width * 0.5f, close.size.height * 0.5f));
+                closeBack->addChild(x);
+            }
+        }
+
+        for (int row = 0; row < LOG_VIEW_LINE_COUNT; ++row) {
+            auto* line = makeLabel("", false, LOG_VIEW_LINE_SCALE, logTextColor());
+            if (!line) {
+                continue;
+            }
+            line->setAnchorPoint(CCPoint(0.f, 0.5f));
+            line->setPosition(CCPoint(26.f, height - 74.f - static_cast<float>(row) * LOG_VIEW_LINE_STEP));
+            sheet->addChild(line, 3);
+            m_logViewLines[row] = line;
+        }
+
+        if (auto* hint = makeLabel("drag or scroll to move - tap the list to jump back to latest", false, 0.4f, faintTextColor())) {
+            hint->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            hint->setPosition(CCPoint(width * 0.5f, 12.f));
+            fitLabelToWidth(hint, width - 40.f);
+            sheet->addChild(hint, 3);
+        }
+
+        m_logViewBar = makeDrawNode();
+        sheet->addChild(m_logViewBar, 2);
+
+        refresh();
+    }
+
+    void AfterflowOverlay::closeLogLayer() {
+        m_logViewDragging = false;
+        m_logViewDragMoved = false;
+        if (m_logLayer) {
+            m_logLayer->removeFromParentAndCleanup(true);
+            m_logLayer = nullptr;
+        }
+        for (int row = 0; row < LOG_VIEW_LINE_COUNT; ++row) {
+            m_logViewLines[row] = nullptr;
+        }
+        m_logViewTitleLabel = nullptr;
+        m_logViewCountLabel = nullptr;
+        m_logViewBar = nullptr;
+    }
+
     void AfterflowOverlay::applyChip() {
         if (!m_chipBar) {
             return;
@@ -3776,8 +4307,8 @@ finally {
                 m_chipBar->drawCircle(CCPoint(dotX, dotY), 4.f, color4(accentColor(), 255), 0.f, color4(0, 0, 0, 0), 18);
             }
             else {
-                drawCurvedRect(m_chipBar, cell, radius, color4(255, 255, 255, 8), color4(255, 255, 255, 26), 1.f);
-                m_chipBar->drawCircle(CCPoint(dotX, dotY), 3.f, color4(255, 255, 255, 70), 0.f, color4(0, 0, 0, 0), 18);
+                drawCurvedRect(m_chipBar, cell, radius, panelTint(8), panelTint(26), 1.f);
+                m_chipBar->drawCircle(CCPoint(dotX, dotY), 3.f, panelTint(70), 0.f, color4(0, 0, 0, 0), 18);
             }
             if (m_chipLabels[index]) {
                 m_chipLabels[index]->setColor(isOn ? logTextColor() : softTextColor());
@@ -3803,7 +4334,7 @@ finally {
             if (m_tabLabels[index]) {
                 bool isActive = index == m_activeTab;
                 m_tabLabels[index]->stopAllActions();
-                m_tabLabels[index]->setColor(isActive ? color3(244, 245, 250) : faintTextColor());
+                m_tabLabels[index]->setColor(isActive ? onSurfaceStrong() : faintTextColor());
                 m_tabLabels[index]->setOpacity(isActive ? 255 : 185);
                 if (isActive && m_lastAppliedTab >= 0 && m_lastAppliedTab != m_activeTab && m_isOpen) {
                     m_tabLabels[index]->setOpacity(110);
@@ -3824,6 +4355,7 @@ finally {
         }
         if (m_logHighlight) { m_logHighlight->setVisible(showLog); }
         if (m_copyButton) { m_copyButton->setVisible(showLog); }
+        if (m_logExpandButton) { m_logExpandButton->setVisible(showLog); }
 
         if (m_stageNameLabel) { m_stageNameLabel->setVisible(showStage); }
         if (m_stageIndexLabel) { m_stageIndexLabel->setVisible(showStage); }
@@ -3858,8 +4390,11 @@ finally {
         if (m_tutorialButton) { m_tutorialButton->setVisible(showSettings); }
         if (m_creditsButton) { m_creditsButton->setVisible(showSettings); }
         if (m_configStatusLabel) { m_configStatusLabel->setVisible(showSettings); }
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < SETTINGS_CELL_COUNT; ++i) {
             if (m_settingsValueLabels[i]) { m_settingsValueLabels[i]->setVisible(showSettings); }
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (m_settingsStepLabels[i]) { m_settingsStepLabels[i]->setVisible(showSettings); }
         }
         for (int i = 0; i < THEME_COUNT; ++i) {
             if (m_settingsThemeLabels[i]) { m_settingsThemeLabels[i]->setVisible(showSettings); }
@@ -3881,7 +4416,7 @@ finally {
         }
         if (m_stageNameLabel) {
             m_stageNameLabel->setString(stageTitleAt(state.stageIndex).c_str());
-            m_stageNameLabel->setColor(state.isEnabled ? color3(240, 241, 246) : warningColor());
+            m_stageNameLabel->setColor(state.isEnabled ? onSurfaceStrong() : warningColor());
         }
         if (m_stageDescriptionLabel) {
             auto description = state.isEnabled
@@ -3893,7 +4428,7 @@ finally {
 
         if (m_statusLabel) {
             m_statusLabel->setString(state.isEnabled ? "buffer on" : "buffer off");
-            m_statusLabel->setColor(state.isEnabled ? secondaryColor() : warningColor());
+            m_statusLabel->setColor(state.isEnabled ? (lightSurface() ? softTextColor() : secondaryColor()) : warningColor());
 
             float labelWidth = m_statusLabel->getContentSize().width * m_statusLabel->getScale();
             float pillWidth = labelWidth + 36.f;
@@ -3907,8 +4442,8 @@ finally {
                     m_statusBeacon,
                     CCRect(pillX, centerY - STATUS_HEIGHT * 0.5f, pillWidth, STATUS_HEIGHT),
                     7.f,
-                    color4(255, 255, 255, 8),
-                    color4(255, 255, 255, 20),
+                    panelTint(8),
+                    panelTint(20),
                     1.f
                 );
                 m_statusBeacon->drawCircle(CCPoint(pillX + 13.f, centerY), 6.f, color4(live, 34), 0.f, color4(0, 0, 0, 0), 18);
@@ -3922,8 +4457,8 @@ finally {
                 m_stageTrack,
                 CCRect(STAGE_TRACK_X, STAGE_TRACK_Y, STAGE_TRACK_WIDTH, STAGE_TRACK_HEIGHT),
                 8.f,
-                color4(255, 255, 255, 7),
-                color4(255, 255, 255, 14),
+                panelTint(7),
+                panelTint(14),
                 1.f
             );
 
@@ -3945,7 +4480,7 @@ finally {
                 }
                 bool isSelected = index == state.stageIndex;
                 bool isAvailable = stageEnabledAt(index);
-                nameLabel->setColor(isSelected ? color3(248, 249, 253) : (isAvailable ? softTextColor() : warningColor()));
+                nameLabel->setColor(isSelected ? onSurfaceStrong() : (isAvailable ? softTextColor() : warningColor()));
                 nameLabel->setOpacity(isSelected ? 255 : 205);
             }
 
@@ -3967,26 +4502,23 @@ finally {
             }
             auto drawBar = [&](int barIndex, float y, ccColor3B tint) {
                 float const ticks = m_barShown[barIndex];
-                // dark track with a faint outline
                 drawCurvedRect(
                     m_stageTrack,
                     CCRect(STAGE_BAR_X, y - barHeight * 0.5f, STAGE_BAR_WIDTH, barHeight),
                     3.5f,
                     color4(0, 0, 0, 70),
-                    color4(255, 255, 255, 22),
+                    panelTint(22),
                     1.f
                 );
                 if (ticks > 0.5f) {
                     float ratio = std::clamp(ticks / static_cast<float>(barMax), 0.03f, 1.f);
                     if (isCustomSelected) {
-                        // custom stages use the same 1..CUSTOM_TICKS_MAX mapping as the slider
                         ratio = std::clamp(
                             (ticks - static_cast<float>(CUSTOM_TICKS_MIN)) / static_cast<float>(CUSTOM_TICKS_MAX - CUSTOM_TICKS_MIN),
                             0.f, 1.f
                         );
                     }
                     float fillWidth = std::max(8.f, STAGE_BAR_WIDTH * ratio);
-                    // soft glow behind the fill
                     drawCurvedRect(
                         m_stageTrack,
                         CCRect(STAGE_BAR_X - 1.5f, y - barHeight * 0.5f - 2.5f, fillWidth + 3.f, barHeight + 5.f),
@@ -3995,7 +4527,6 @@ finally {
                         color4(0, 0, 0, 0),
                         0.f
                     );
-                    // solid neon fill
                     drawCurvedRect(
                         m_stageTrack,
                         CCRect(STAGE_BAR_X, y - barHeight * 0.5f, fillWidth, barHeight),
@@ -4004,7 +4535,6 @@ finally {
                         color4(tint, 255),
                         1.f
                     );
-                    // bright core line through the middle, like the old bar
                     if (fillWidth > 10.f) {
                         drawCurvedRect(
                             m_stageTrack,
@@ -4016,7 +4546,6 @@ finally {
                         );
                     }
                     if (isCustomSelected) {
-                        // slim glowing handle so it reads as draggable
                         float knobX = STAGE_BAR_X + STAGE_BAR_WIDTH * ratio;
                         drawCurvedRect(
                             m_stageTrack,
@@ -4040,21 +4569,20 @@ finally {
             drawBar(0, STAGE_TIMING_ALL_Y, live);
             drawBar(1, STAGE_TIMING_WAVE_Y, live);
 
-            // value boxes
             for (int row = 0; row < 2; ++row) {
                 drawCurvedRect(
                     m_stageTrack,
                     tickValueRect(row),
                     6.f,
-                    color4(255, 255, 255, 8),
-                    color4(255, 255, 255, 24),
+                    panelTint(8),
+                    panelTint(24),
                     1.f
                 );
                 if (m_tickValueLabels[row]) {
                     int ticks = row == 0 ? shownAll : shownWave;
                     m_tickValueLabels[row]->setScale(0.62f * getUIFontScale());
                     m_tickValueLabels[row]->setString(state.isEnabled ? fmt::format("{}t", ticks).c_str() : "off");
-                    m_tickValueLabels[row]->setColor(state.isEnabled ? color3(240, 241, 246) : warningColor());
+                    m_tickValueLabels[row]->setColor(state.isEnabled ? onSurfaceStrong() : warningColor());
                     fitLabelToWidth(m_tickValueLabels[row], TICK_VALUE_W - 10.f);
                     m_tickValueLabels[row]->setVisible(showStageTab && !isCustomSelected);
                 }
@@ -4075,7 +4603,6 @@ finally {
                 }
             }
 
-            // -5 / -1 / +1 / +5 buttons, only for custom stages
             for (int row = 0; row < 2; ++row) {
                 int ticks = isCustomSelected ? (row == 0 ? customStage->ticksAll : customStage->ticksWave) : 0;
                 for (int which = 0; which < 4; ++which) {
@@ -4101,7 +4628,6 @@ finally {
                 }
             }
 
-            // + custom / remove
             bool canAddCustom = stageTotalCount() - STAGE_TABLE_SIZE < CUSTOM_STAGE_LIMIT;
             drawCurvedRect(
                 m_stageTrack,
@@ -4159,14 +4685,37 @@ finally {
         }
 
         auto logs = recentLogSnapshot();
+        if (logs.size() != m_logLastCount) {
+            float const delta = static_cast<float>(logs.size()) - static_cast<float>(m_logLastCount);
+            if (m_logScroll > 0.f) {
+                m_logScroll = std::max(0.f, m_logScroll + delta);
+            }
+            if (m_logViewScroll > 0.f) {
+                m_logViewScroll = std::max(0.f, m_logViewScroll + delta);
+            }
+            m_logLastCount = logs.size();
+        }
+        int const logTotal = static_cast<int>(logs.size());
+        int const paneMax = std::max(0, logTotal - LOG_LINE_COUNT);
+        m_logScroll = std::clamp(m_logScroll, 0.f, static_cast<float>(paneMax));
+        int const paneScroll = static_cast<int>(std::lround(m_logScroll));
+        int const viewMax = std::max(0, logTotal - LOG_VIEW_LINE_COUNT);
+        m_logViewScroll = std::clamp(m_logViewScroll, 0.f, static_cast<float>(viewMax));
+        int const viewScroll = static_cast<int>(std::lround(m_logViewScroll));
+
         if (m_activityCountLabel) {
             m_activityCountLabel->setScale(0.62f * getUIFontScale());
             auto entryWord = logs.size() == 1 ? "event" : "events";
-            m_activityCountLabel->setString(fmt::format("/ {} {}", logs.size(), entryWord).c_str());
+            std::string countText = fmt::format("/ {} {}", logs.size(), entryWord);
+            if (paneScroll > 0) {
+                countText += fmt::format(" - back {}", paneScroll);
+            }
+            m_activityCountLabel->setString(countText.c_str());
             float natural = m_activityCountLabel->getContentSize().width * m_activityCountLabel->getScale();
             float right = m_activityCountLabel->getPositionX() + natural;
-            if (right > COPY_X - 12.f && natural > 0.f) {
-                float available = (COPY_X - 12.f) - m_activityCountLabel->getPositionX();
+            float const limit = LOG_EXPAND_X - 12.f;
+            if (right > limit && natural > 0.f) {
+                float available = limit - m_activityCountLabel->getPositionX();
                 if (available > 8.f) {
                     m_activityCountLabel->setScale(m_activityCountLabel->getScale() * available / natural);
                 }
@@ -4175,7 +4724,7 @@ finally {
 
         if (m_logHighlight) {
             m_logHighlight->clear();
-            if (!logs.empty()) {
+            if (!logs.empty() && paneScroll == 0) {
                 float latestY = LOG_LINE_START_Y - static_cast<float>(LOG_LINE_COUNT - 1) * LOG_LINE_STEP;
                 drawCurvedRect(
                     m_logHighlight,
@@ -4186,39 +4735,47 @@ finally {
                     0.f
                 );
             }
+            drawLogScrollbar(
+                m_logHighlight,
+                CCRect(LOG_X + LOG_WIDTH - 15.f, LOG_PANE_BOTTOM + 2.f, 3.f, LOG_PANE_TOP - LOG_PANE_BOTTOM - 4.f),
+                logTotal,
+                LOG_LINE_COUNT,
+                m_logScroll
+            );
         }
 
-        size_t visibleCount = std::min<size_t>(logs.size(), LOG_LINE_COUNT);
-        size_t firstVisible = logs.size() - visibleCount;
-        int lineOffset = LOG_LINE_COUNT - static_cast<int>(visibleCount);
-        for (int index = 0; index < LOG_LINE_COUNT; ++index) {
-            auto* line = m_activityLines[index];
-            if (!line) {
-                continue;
-            }
-            bool hasLine = index >= lineOffset;
-            if (hasLine) {
-                size_t logIndex = firstVisible + static_cast<size_t>(index - lineOffset);
-                bool isLatest = index == LOG_LINE_COUNT - 1;
-                auto text = singleLineLog(logs[logIndex]);
-                text = (isLatest ? "> " : "  ") + text;
-                fitLogLine(line, text, LOG_WIDTH - 130.f);
-                bool lowPriority = text.find("host os") != std::string::npos
-                    || text.find("loader") != std::string::npos
-                    || text.find("version check") != std::string::npos;
-                float baseScale = 0.96f * getUIFontScale();
-                line->setScale(isLatest ? baseScale : (lowPriority ? baseScale * 0.88f : baseScale * 0.97f));
-                line->setColor(isLatest ? secondaryColor() : logTextColor());
-                line->setOpacity(isLatest ? 255 : (lowPriority ? 150 : 232));
-            }
-            else {
-                line->setString("");
-            }
-        }
+        renderLogRows(m_activityLines, LOG_LINE_COUNT, logs, paneScroll, LOG_WIDTH - 130.f, 0.96f * getUIFontScale(), true);
         if (logs.empty() && m_activityLines[0]) {
             auto* line = m_activityLines[0];
             fitLogLine(line, "> no activity yet / inputs will appear here", LOG_WIDTH - 130.f);
             line->setColor(faintTextColor());
+        }
+
+        if (m_logLayer) {
+            renderLogRows(m_logViewLines, LOG_VIEW_LINE_COUNT, logs, viewScroll, LOG_VIEW_CARD_WIDTH - 70.f, LOG_VIEW_LINE_SCALE * getUIFontScale(), true);
+            if (logs.empty() && m_logViewLines[0]) {
+                auto* line = m_logViewLines[0];
+                fitLogLine(line, "> no activity yet / inputs will appear here", LOG_VIEW_CARD_WIDTH - 70.f);
+                line->setColor(faintTextColor());
+            }
+            if (m_logViewCountLabel) {
+                auto entryWord = logs.size() == 1 ? "event" : "events";
+                std::string countText = fmt::format("{} {}", logs.size(), entryWord);
+                if (viewScroll > 0) {
+                    countText += fmt::format(" - back {}", viewScroll);
+                }
+                m_logViewCountLabel->setString(countText.c_str());
+            }
+            if (m_logViewBar) {
+                m_logViewBar->clear();
+                drawLogScrollbar(
+                    m_logViewBar,
+                    CCRect(LOG_VIEW_CARD_WIDTH - 20.f, 20.f, 3.f, LOG_VIEW_CARD_HEIGHT - 100.f),
+                    logTotal,
+                    LOG_VIEW_LINE_COUNT,
+                    m_logViewScroll
+                );
+            }
         }
 
         if (m_settingsValueLabels[0]) {
@@ -4227,9 +4784,12 @@ finally {
             m_settingsValueLabels[0]->setColor(glowOn ? logTextColor() : faintTextColor());
         }
         if (m_settingsValueLabels[1]) {
-            bool terminalOn = isTerminalEnabled();
-            m_settingsValueLabels[1]->setString(terminalOn ? "terminal  on" : "terminal  off");
-            m_settingsValueLabels[1]->setColor(terminalOn ? logTextColor() : faintTextColor());
+            m_settingsValueLabels[1]->setString(fmt::format("panel  {}%", std::lround(getUIPanelScale() * 100.f)).c_str());
+            m_settingsValueLabels[1]->setColor(logTextColor());
+        }
+        if (m_settingsValueLabels[2]) {
+            m_settingsValueLabels[2]->setString(fmt::format("font  {}%", std::lround(getUIFontScale() * 100.f)).c_str());
+            m_settingsValueLabels[2]->setColor(logTextColor());
         }
 
         int activeMode = -1;
@@ -4254,8 +4814,6 @@ finally {
             }
             bool isActive = index < static_cast<int>(m_modeSlots.size()) && m_modeSlots[index] == activeMode;
             float baseScale = MODE_ICON_SIZE / 40.f;
-            // active: full size + full opacity, inactive: 80% size + dimmed,
-            // and a neutral mid-state when the player is not inside a level.
             float targetScale = (activeMode < 0) ? baseScale : (isActive ? baseScale : baseScale * 0.8f);
             int targetOpacity = (activeMode < 0) ? 150 : (isActive ? 255 : 100);
             icon->setScale(targetScale);
@@ -4282,6 +4840,9 @@ finally {
             return;
         }
         m_isOpen = true;
+        m_logScroll = 0.f;
+        m_logViewScroll = 0.f;
+        m_logLastCount = 0;
         if (!isMobileHost()) {
             setTouchEnabled(true);
         }
@@ -4313,7 +4874,11 @@ finally {
         if (!m_isOpen) {
             return;
         }
+        closeCreditsLayer();
+        closeLogLayer();
         endTickEdit();
+        m_logDragging = false;
+        m_logDragMoved = false;
         m_isOpen = false;
         unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
         unschedule(schedule_selector(AfterflowOverlay::animTick));
@@ -4371,6 +4936,7 @@ finally {
     }
 
     void AfterflowOverlay::onEnter() {
+        setMouseEnabled(true);
         CCLayer::onEnter();
         layout();
         refresh();
@@ -4400,6 +4966,32 @@ finally {
         CCDirector::get()->getTouchDispatcher()->addTargetedDelegate(this, -1000, true);
     }
 
+    void AfterflowOverlay::scrollWheel(float y, float) {
+        if (!m_isOpen || !m_deck || !m_deck->isVisible() || m_tutorialStep >= 0 || m_creditsLayer) {
+            return;
+        }
+        float const steps = std::clamp(y, -3.f, 3.f);
+        if (steps == 0.f) {
+            return;
+        }
+        CCPoint const mouse = geode::cocos::getMousePos();
+        CCPoint const deckPoint = m_deck->convertToNodeSpace(mouse);
+        if (!CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT).containsPoint(deckPoint)) {
+            return;
+        }
+        if (m_logLayer) {
+            if (logViewListRect().containsPoint(deckPoint)) {
+                m_logViewScroll += steps;
+                refresh();
+            }
+            return;
+        }
+        if (m_activeTab == 0 && logPaneRect().containsPoint(deckPoint)) {
+            m_logScroll += steps;
+            refresh();
+        }
+    }
+
     bool AfterflowOverlay::ccTouchBegan(CCTouch* touch, CCEvent*) {
         if (!touch) {
             return false;
@@ -4407,9 +4999,25 @@ finally {
         if (m_isOpen) {
             CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
             if (m_tutorialStep >= 0) {
-                // while the tour is up only its own buttons react
                 m_pressedTarget = tutorialHit(deckPoint);
                 m_pressedStageSlot = -1;
+                return true;
+            }
+            if (m_creditsLayer) {
+                m_pressedTarget = HitTarget::None;
+                m_pressedStageSlot = -1;
+                return true;
+            }
+            if (m_logLayer) {
+                m_pressedTarget = HitTarget::None;
+                m_pressedStageSlot = -1;
+                m_logViewDragging = false;
+                m_logViewDragMoved = false;
+                if (logViewListRect().containsPoint(deckPoint)) {
+                    m_logViewDragging = true;
+                    m_logViewDragStartY = deckPoint.y;
+                    m_logViewDragBase = m_logViewScroll;
+                }
                 return true;
             }
             if (!CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT).containsPoint(deckPoint)) {
@@ -4421,6 +5029,12 @@ finally {
             int stageSlot = -1;
             m_pressedTarget = hitTest(deckPoint, &stageSlot);
             m_pressedStageSlot = stageSlot;
+            if (m_pressedTarget == HitTarget::LogPane) {
+                m_logDragging = true;
+                m_logDragMoved = false;
+                m_logDragStartY = deckPoint.y;
+                m_logDragBase = m_logScroll;
+            }
             if (m_editingRow >= 0 && !(m_pressedTarget == HitTarget::TickField && stageSlot == m_editingRow)) {
                 endTickEdit();
             }
@@ -4474,13 +5088,39 @@ finally {
             return;
         }
 
-        if (m_tutorialStep >= 0) {
+        if (m_logViewDragging && m_logLayer) {
+            CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            float const travel = m_logViewDragStartY - deckPoint.y;
+            if (std::abs(travel) > 6.f) {
+                m_logViewDragMoved = true;
+            }
+            if (m_logViewDragMoved) {
+                m_logViewScroll = m_logViewDragBase + travel / LOG_VIEW_LINE_STEP;
+                refresh();
+            }
+            return;
+        }
+
+        if (m_tutorialStep >= 0 || m_creditsLayer) {
             return;
         }
 
         if (m_draggingSlider) {
             if (m_isOpen) {
                 setSliderFromX(m_deck->convertToNodeSpace(touch->getLocation()).x);
+            }
+            return;
+        }
+
+        if (m_logDragging && m_isOpen) {
+            CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            float const travel = m_logDragStartY - deckPoint.y;
+            if (std::abs(travel) > 5.f) {
+                m_logDragMoved = true;
+            }
+            if (m_logDragMoved) {
+                m_logScroll = m_logDragBase + travel / LOG_LINE_STEP;
+                refresh();
             }
             return;
         }
@@ -4537,6 +5177,30 @@ finally {
             return;
         }
 
+        if (m_creditsLayer) {
+            CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            if (creditsCloseRect().containsPoint(deckPoint) || !creditsCardRect().containsPoint(deckPoint)) {
+                closeCreditsLayer();
+            }
+            return;
+        }
+
+        if (m_logLayer) {
+            CCPoint deckPoint = m_deck->convertToNodeSpace(touch->getLocation());
+            bool const wasDragging = m_logViewDragging;
+            bool const moved = m_logViewDragMoved;
+            m_logViewDragging = false;
+            m_logViewDragMoved = false;
+            if (logViewCloseRect().containsPoint(deckPoint) || !logViewCardRect().containsPoint(deckPoint)) {
+                closeLogLayer();
+            }
+            else if (wasDragging && !moved) {
+                m_logViewScroll = 0.f;
+                refresh();
+            }
+            return;
+        }
+
         if (m_tutorialStep >= 0) {
             HitTarget pressed = m_pressedTarget;
             m_pressedTarget = HitTarget::None;
@@ -4550,6 +5214,18 @@ finally {
                         advanceTutorial();
                     }
                 }
+            }
+            return;
+        }
+
+        if (m_pressedTarget == HitTarget::LogPane) {
+            m_pressedTarget = HitTarget::None;
+            bool const moved = m_logDragMoved;
+            m_logDragging = false;
+            m_logDragMoved = false;
+            if (!moved) {
+                m_logScroll = 0.f;
+                refresh();
             }
             return;
         }
@@ -4576,6 +5252,10 @@ finally {
     }
 
     void AfterflowOverlay::ccTouchCancelled(CCTouch*, CCEvent*) {
+        m_logDragging = false;
+        m_logDragMoved = false;
+        m_logViewDragging = false;
+        m_logViewDragMoved = false;
         if (m_draggingSlider) {
             m_draggingSlider = false;
             m_sliderRow = -1;
@@ -4647,7 +5327,6 @@ finally {
     }
 
     void AfterflowOverlay::advanceTutorial() {
-        // if next is pressed before the cursor tapped a tab, still switch to it
         if (m_tutTapNow && !m_tutActionDone) {
             int pendingTab = m_tutKindNow - TF_TAB0;
             if (pendingTab >= 0 && pendingTab < TAB_COUNT && pendingTab != m_activeTab) {
@@ -4669,7 +5348,6 @@ finally {
         Mod::get()->setSavedValue<bool>(TUTORIAL_DONE_KEY, true);
         (void)Mod::get()->saveData();
         if (m_tutorialLayer) {
-            // let it glide away instead of vanishing
             m_tutClosing = true;
             m_tutKindNow = -1;
             m_tutKind2 = -1;
@@ -4706,7 +5384,6 @@ finally {
             m_tutFx = makeDrawNode();
             m_tutorialLayer->addChild(m_tutFx, 4);
 
-            // pointer, tip at the node origin
             m_tutCursor = makeDrawNode();
             ccColor4F shadow = color4(0, 0, 0, 90);
             CCPoint headShadow[3] = { CCPoint(2.f, -2.f), CCPoint(2.f, -21.f), CCPoint(15.f, -15.f) };
@@ -4741,7 +5418,6 @@ finally {
             m_tutKind2 = -1;
         }
 
-        // fresh card contents for this step
         m_tutProgress = nullptr;
         m_tutCard->removeAllChildrenWithCleanup(true);
         m_tutCard->setContentSize(CCSize(TUTORIAL_CARD_W, cardHeight));
@@ -4750,7 +5426,7 @@ finally {
         drawCurvedRect(glow, CCRect(-4.f, -4.f, TUTORIAL_CARD_W + 8.f, cardHeight + 8.f), 15.f, clear, color4(accentColor(), 34), 2.f);
         m_tutCard->addChild(glow, 0);
         auto* bg = makeDrawNode();
-        drawCurvedRect(bg, CCRect(0.f, 0.f, TUTORIAL_CARD_W, cardHeight), 12.f, color4(18, 18, 24, 250), color4(accentColor(), 150), 1.5f);
+        drawCurvedRect(bg, CCRect(0.f, 0.f, TUTORIAL_CARD_W, cardHeight), 12.f, color4(getUISurfaceColor(), 250), color4(accentColor(), 150), 1.5f);
         m_tutCard->addChild(bg, 1);
 
         m_tutProgress = makeDrawNode();
@@ -4768,7 +5444,7 @@ finally {
             ));
         };
 
-        if (auto* title = makeLabel(step.title, true, 0.82f, color3(242, 243, 248))) {
+        if (auto* title = makeLabel(step.title, true, 0.82f, onSurfaceStrong())) {
             title->setAnchorPoint(CCPoint(0.f, 0.5f));
             title->setPosition(CCPoint(26.f - 14.f, cardHeight - 50.f));
             fitLabelToWidth(title, TUTORIAL_CARD_W - 130.f);
@@ -4853,7 +5529,6 @@ finally {
             m_tutAlpha = std::min(1.f, m_tutAlpha + dt * 4.f);
         }
 
-        // ---- cursor and step script ----
         float pressScale = 1.f;
         if (m_tutKindNow >= 0) {
             CCRect targetRect = tutorialRectFor(m_tutKindNow);
@@ -4919,7 +5594,6 @@ finally {
         m_tutCursor->setScale(1.3f * m_tutCursorVis * pressScale);
         m_tutCursor->setVisible(m_tutCursorVis > 0.03f);
 
-        // ---- tap ripple ----
         m_tutFx->clear();
         if (m_tutRippleT >= 0.f) {
             m_tutRippleT += dt;
@@ -4943,7 +5617,6 @@ finally {
             }
         }
 
-        // ---- spotlight ----
         m_tutSpot.origin.x = ease(m_tutSpot.origin.x, m_tutSpotTarget.origin.x, 9.f);
         m_tutSpot.origin.y = ease(m_tutSpot.origin.y, m_tutSpotTarget.origin.y, 9.f);
         m_tutSpot.size.width = ease(m_tutSpot.size.width, m_tutSpotTarget.size.width, 9.f);
@@ -4980,14 +5653,12 @@ finally {
         }
         drawCurvedRect(m_tutShade, lit, 9.f, clearColor, color4(accentColor(), static_cast<int>((150.f + 90.f * pulse) * alpha)), 2.f);
 
-        // ---- card slide ----
         CCPoint cardPos = m_tutCard->getPosition();
         m_tutCard->setPosition(CCPoint(
             ease(cardPos.x, m_tutCardTarget.x, 10.f),
             ease(cardPos.y, m_tutCardTarget.y, 10.f)
         ));
 
-        // ---- progress pills ----
         if (m_tutProgress) {
             m_tutProgShown = ease(m_tutProgShown, static_cast<float>(std::max(m_tutorialStep, 0)), 9.f);
             m_tutProgress->clear();
@@ -4999,7 +5670,7 @@ finally {
                 bool reached = static_cast<float>(index) <= m_tutProgShown + 0.5f;
                 drawCurvedRect(
                     m_tutProgress, CCRect(x, y - 2.5f, width, 5.f), 2.5f,
-                    reached ? color4(accentColor(), 235) : color4(255, 255, 255, 40),
+                    reached ? color4(accentColor(), 235) : panelTint(40),
                     color4(0, 0, 0, 0), 0.f
                 );
                 x += width + 5.f;
@@ -5015,7 +5686,6 @@ finally {
         auto slot = tabSlotRect(m_activeTab);
         float baseWidth = slot.size.width - 36.f;
         float travel = m_tabIndTarget - m_tabIndX;
-        // stretch toward the direction of travel so the pill looks fluid
         float stretch = std::min(std::abs(travel) * 0.2f, 28.f);
         float x = travel >= 0.f ? m_tabIndX : m_tabIndX - stretch;
         drawCurvedRect(
@@ -5068,7 +5738,6 @@ finally {
             return;
         }
         m_editingRow = row;
-        // start empty so the digits typed replace the old value
         m_suppressTickInput = true;
         m_tickInputs[row]->setString("");
         m_suppressTickInput = false;
@@ -5151,9 +5820,17 @@ finally {
                     return HitTarget::Theme;
                 }
             }
-            for (int row = 0; row < 2; ++row) {
-                if (settingsRowRect(row).containsPoint(point)) {
-                    if (stageSlot) { *stageSlot = row; }
+            for (int cell = 1; cell < SETTINGS_CELL_COUNT; ++cell) {
+                for (int which = 0; which < 2; ++which) {
+                    if (settingsStepRect(cell, which == 1).containsPoint(point)) {
+                        if (stageSlot) { *stageSlot = (cell - 1) * 2 + which; }
+                        return HitTarget::SettingsStep;
+                    }
+                }
+            }
+            for (int cell = 0; cell < SETTINGS_CELL_COUNT; ++cell) {
+                if (settingsCellRect(cell).containsPoint(point)) {
+                    if (stageSlot) { *stageSlot = cell; }
                     return HitTarget::SettingsRow;
                 }
             }
@@ -5175,8 +5852,14 @@ finally {
         if (CCRect(DISMISS_X, DISMISS_Y, DISMISS_WIDTH, DISMISS_HEIGHT).containsPoint(point)) {
             return HitTarget::Dismiss;
         }
+        if (m_activeTab == 0 && logExpandRect().containsPoint(point)) {
+            return HitTarget::LogExpand;
+        }
         if (m_activeTab == 0 && CCRect(COPY_X, COPY_Y, COPY_WIDTH, COPY_HEIGHT).containsPoint(point)) {
             return HitTarget::CopyLog;
+        }
+        if (m_activeTab == 0 && logPaneRect().containsPoint(point)) {
+            return HitTarget::LogPane;
         }
         if (m_activeTab == 1) {
             for (int index = 0; index < stageTotalCount(); ++index) {
@@ -5230,6 +5913,7 @@ finally {
             case HitTarget::StageBack: return m_stageBackButton;
             case HitTarget::StageForward: return m_stageForwardButton;
             case HitTarget::CopyLog: return m_copyButton;
+            case HitTarget::LogExpand: return m_logExpandButton;
             case HitTarget::Terminal: return m_terminalButton;
             case HitTarget::ImportConfig: return m_importButton;
             case HitTarget::ExportConfig: return m_exportButton;
@@ -5288,24 +5972,36 @@ finally {
         }
 
         if (target == HitTarget::Credits) {
-            FLAlertLayer::create(
-                "Credits",
-                "<cy>sevend</c> - creator of afterflow + original ui\n"
-                "<cy>Sir Abraham Creakstopher the second</c> - baller.w21 made mobile support and a ton of stuff\n"
-                "<cy>Legion</c> - nyxx6_1 gave a ton of ideas",
-                "thank you"
-            )->show();
+            buildCreditsLayer();
+            return;
+        }
+
+        if (target == HitTarget::LogExpand) {
+            buildLogLayer();
+            return;
+        }
+
+        if (target == HitTarget::SettingsStep) {
+            int const slot = m_pressedStageSlot;
+            if (slot >= 0 && slot < 4) {
+                int const cell = 1 + slot / 2;
+                bool const plus = (slot % 2) == 1;
+                char const* key = cell == 1 ? "ui-panel-scale" : "ui-font-scale";
+                double const low = cell == 1 ? 0.4 : 0.8;
+                double const high = 2.0;
+                double value = Mod::get()->getSettingValue<double>(key) + (plus ? 0.05 : -0.05);
+                value = std::round(std::clamp(value, low, high) * 100.0) / 100.0;
+                Mod::get()->setSettingValue<double>(key, value);
+                rebuildDeck();
+            }
             return;
         }
 
         if (target == HitTarget::SettingsRow) {
             if (m_pressedStageSlot == 0) {
                 Mod::get()->setSettingValue<bool>("ui-glow", !getUIGlow());
+                rebuildDeck();
             }
-            else if (m_pressedStageSlot == 1) {
-                Mod::get()->setSettingValue<bool>("terminal-enabled", !isTerminalEnabled());
-            }
-            rebuildDeck();
             return;
         }
 
@@ -5520,8 +6216,6 @@ finally {
         m_modeIconContainer->removeAllChildrenWithCleanup(true);
         m_modeIcons.clear();
 
-        // the row backdrop is a child of the container, so rebuilding the
-        // icons has to put it back as well
         if (auto* iconBack = makeDrawNode()) {
             int slotCount = static_cast<int>(modeSlots().size());
             for (int index = 0; index <= slotCount; ++index) {
@@ -5535,7 +6229,7 @@ finally {
                         MODE_ICON_SIZE + 8.f
                     ),
                     5.f,
-                    color4(255, 255, 255, isAdd ? 6 : 12),
+                    panelTint(isAdd ? 6 : 12),
                     color4(0, 0, 0, 0),
                     0.f
                 );
@@ -6872,7 +7566,6 @@ finally {
         bool hasFlyer = isFlying(player1) || (player2 && isFlying(player2));
         int groundHorizon = std::clamp(state.groundHorizonTicks, 48, 240);
         if (!hasFlyer && state.ticksAllModes + 48 > groundHorizon) {
-            // a long custom delay needs a lookahead that reaches past it
             groundHorizon = std::min(state.ticksAllModes + 48, 288);
         }
         int horizonTicks = st(hasFlyer ? 48 : groundHorizon);
@@ -7283,7 +7976,6 @@ class $modify(BufPauseLayer, PauseLayer) {
             return;
         }
 
-        // on-screen size of the settings button (include every parent's scale up to the pause layer)
         float scaleX = 1.f;
         float scaleY = 1.f;
         for (CCNode* node = settingsButton; node && node != this; node = node->getParent()) {
@@ -7312,13 +8004,11 @@ class $modify(BufPauseLayer, PauseLayer) {
         auto* button = CCMenuItemSpriteExtra::create(face, this, menu_selector(BufPauseLayer::onAfterflowButton));
         button->setID("afterflow-button"_spr);
 
-        // place it directly under the settings button
         CCPoint worldPosition = settingsButton->getParent()->convertToWorldSpace(settingsButton->getPosition());
         CCPoint localPosition = this->convertToNodeSpace(worldPosition);
         float gap = 6.f;
         CCPoint target(localPosition.x, localPosition.y - height - gap);
         if (target.y - height / 2.f < 4.f) {
-            // no room below, put it to the left instead
             target = CCPoint(localPosition.x - width - gap, localPosition.y);
         }
 
