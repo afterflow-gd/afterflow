@@ -5,6 +5,7 @@
 - [fix] the version check no longer runs inside `$on_mod(Loaded)`; it fires once the menu layer is up. `setMouseEnabled` is desktop only now.
 - added startup breadcrumbs to the geode log (`load start`, `load complete`, `building overlay`, `overlay attached`, `menu ready`) so a crash on a platform we cannot debug locally can be pinned to a stage.
 - added `tools/check-ios-linkage.py`, which checks a packaged `.geode`'s ios slice against a geode ios release.
+- [build] the combined package is forced back to deflate. the `combine` action started defaulting to `--zstd` and the geode ios loader has no zstd, so the package extracted to nothing and the game said "no binary could be found for current platform". the action is pinned and a check step now fails the build if a package is not deflate.
 - you can drag the pause menu af button anywhere on mobile now, and the button glow follows the logo instead of drawing a circle around it.
 
 # v2.4.1

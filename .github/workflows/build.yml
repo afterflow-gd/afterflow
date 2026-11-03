@@ -56,8 +56,19 @@ jobs:
     if: ${{ !cancelled() }}
 
     steps:
-      - uses: geode-sdk/build-geode-mod/combine@main
+      - uses: actions/checkout@v4
+
+      # Pinned: build-geode-mod 61a56c6 flipped `zstd` to true by default, and
+      # zstd is exactly what breaks the mod on ios. The geode ios loader has no
+      # zstd, so a zstd package lists its entries and extracts none of them, and
+      # the game reports "No binary could be found for current platform".
+      - uses: geode-sdk/build-geode-mod/combine@61a56c697aea9655e3f31c6c1b83870431f30434
         id: build
+        with:
+          zstd: false
+
+      - name: Verify the package is readable on ios
+        run: python3 tools/check-geode-compression.py "${{ steps.build.outputs.build-output }}"
 
       - uses: actions/upload-artifact@v4
         with:
