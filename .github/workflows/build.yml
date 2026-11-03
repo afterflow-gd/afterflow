@@ -1,4 +1,4 @@
-name: Build Geode Mod
+name: Build Afterflow
 
 on:
   workflow_dispatch:
