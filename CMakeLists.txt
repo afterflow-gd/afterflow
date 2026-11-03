@@ -20,6 +20,12 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 # Set up the mod binary
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 
+# The mod does not use C++ modules, so disable CMake's module dependency
+# scanning. On Android this otherwise invokes the runner's host
+# clang-scan-deps, which cannot read the NDK-built precompiled header and
+# fails the build before the mod sources are compiled.
+set_target_properties(${PROJECT_NAME} PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+
 # Large translation units need /bigobj on MSVC-compatible compilers.
 # These flags are intentionally not applied to other toolchains.
 if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
