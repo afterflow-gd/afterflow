@@ -1,3 +1,12 @@
+# v2.2.4
+
+- **fix: ios crash at the end of the loading bar.** the panel was being built from `CCDirector::willSwitchToScene`, i.e. in the middle of the loading screen -> menu transition, and allocating fonts and sprites there is what kills ios. the overlay is now built on the next main thread tick, against whichever scene is running by then.
+- [fix] the stage strip no longer dereferences a label that failed to create, and it is bounds checked against the stage label array.
+- [fix] the version check no longer runs inside `$on_mod(Loaded)`; it fires once the menu layer is up. `setMouseEnabled` is desktop only now.
+- added startup breadcrumbs to the geode log (`load start`, `load complete`, `building overlay`, `overlay attached`, `menu ready`) so a crash on a platform we cannot debug locally can be pinned to a stage.
+- added `tools/check-ios-linkage.py`, which checks a packaged `.geode`'s ios slice against a geode ios release.
+- you can drag the pause menu af button anywhere on mobile now, and the button glow follows the logo instead of drawing a circle around it.
+
 # v2.4.1
 
 - **mobile pause menu button**: android and ios now get an AF button in the pause menu, directly under the settings button and the same size as it. tap it to open the control panel.

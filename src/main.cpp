@@ -2390,10 +2390,10 @@ finally {
     constexpr float DISMISS_WIDTH = 30.f;
     constexpr float DISMISS_HEIGHT = 30.f;
 
-    constexpr int THEME_COUNT = 14;
-    constexpr int THEMES_PER_ROW = 7;
+    constexpr int THEME_COUNT = 15;
+    constexpr int THEMES_PER_ROW = 8;
     constexpr int THEME_ROW_COUNT = (THEME_COUNT + THEMES_PER_ROW - 1) / THEMES_PER_ROW;
-    constexpr float SWATCH_WIDTH = 84.f;
+    constexpr float SWATCH_WIDTH = 76.f;
     constexpr float SWATCH_HEIGHT = 38.f;
     constexpr float SWATCH_GAP = 6.f;
     constexpr float SWATCH_ROW_GAP = 8.f;
@@ -2505,6 +2505,7 @@ finally {
         { "slate",   0x94A3B8, 0xE2E8F0, 0x151A21, 0xE8EDF3 },
         { "dark",    0xF2F3F7, 0x14161B, 0x0A0B0E, 0xF2F3F7 },
         { "white",   0x3B82F6, 0xFFFFFF, 0xF4F2ED, 0x1C1D22 },
+        { "graphene", 0x8B94A3, 0xC9D1DC, 0x111318, 0xE6EAF0 },
     };
 
     ccColor3B accentColor() {
@@ -3737,9 +3738,12 @@ finally {
 
         m_stageTrack = makeDrawNode();
         m_deck->addChild(m_stageTrack, 1);
-        for (int index = 0; index < stageTotalCount(); ++index) {
+        for (int index = 0; index < stageTotalCount() && index < STAGE_MAX_STAGES; ++index) {
             auto cell = stageCellRect(index);
             auto* nameLabel = makeLabel(stageLabelAt(index), false, 0.58f, softTextColor());
+            if (!nameLabel) {
+                continue;
+            }
             float natural = nameLabel->getContentSize().width * nameLabel->getScale();
             if (natural > cell.size.width - 8.f && natural > 0.f) {
                 nameLabel->setScale(nameLabel->getScale() * (cell.size.width - 8.f) / natural);
@@ -4936,7 +4940,9 @@ finally {
     }
 
     void AfterflowOverlay::onEnter() {
-        setMouseEnabled(true);
+        if (!isMobileHost()) {
+            setMouseEnabled(true);
+        }
         CCLayer::onEnter();
         layout();
         refresh();
@@ -6371,9 +6377,14 @@ finally {
         }
     }
 
-    void attachAfterflowOverlay(CCScene* scene) {
+    void buildAfterflowOverlay(CCScene* scene) {
         if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
             return;
+        }
+        static bool announcedBuild = false;
+        if (!announcedBuild) {
+            announcedBuild = true;
+            log::info("afterflow: building overlay on first scene");
         }
         auto* overlay = AfterflowOverlay::create();
         if (!overlay) {
@@ -6381,6 +6392,24 @@ finally {
         }
         overlay->setZOrder(9999);
         scene->addChild(overlay);
+        static bool announcedAttach = false;
+        if (!announcedAttach) {
+            announcedAttach = true;
+            log::info("afterflow: overlay attached");
+        }
+    }
+
+    void attachAfterflowOverlay(CCScene* scene) {
+        if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
+            return;
+        }
+        // SceneEvent fires from CCDirector::willSwitchToScene, so building the
+        // deck here allocates fonts and sprites (GL textures) in the middle of a
+        // scene transition - the point where mobile crashes. Build it on the
+        // next tick against whatever scene is running by then instead.
+        Loader::get()->queueInMainThread([] {
+            buildAfterflowOverlay(CCScene::get());
+        });
     }
 
     void ensureAfterflowOverlay() {
@@ -6407,7 +6436,7 @@ finally {
         }
         auto* overlay = scene->getChildByType<AfterflowOverlay>(0);
         if (!overlay) {
-            ensureAfterflowOverlay();
+            buildAfterflowOverlay(scene);
             overlay = scene->getChildByType<AfterflowOverlay>(0);
         }
         if (overlay) {
@@ -7774,6 +7803,10 @@ finally {
 
 $on_mod(Loaded) {
 
+    // Breadcrumbs: if the game dies during startup on a platform we cannot
+    // debug locally, the last line of the geode log points at the stage.
+    log::info("afterflow: load start ({})", hostOSName());
+
     constexpr int STAGE_SCHEMA_VERSION = 2;
     int savedStageIndex = std::clamp(Mod::get()->getSavedValue<int>("stage", 0), 0, stageTotalCount() - 1);
     if (Mod::get()->getSavedValue<int>("stage-schema", 1) < STAGE_SCHEMA_VERSION) {
@@ -7835,7 +7868,7 @@ $on_mod(Loaded) {
         say("{} opens the control deck", panelKey());
     }
     say("host os: {} ({})", hostOSName(), hostOSDescription());
-    checkForUpdates(true);
+    log::info("afterflow: load complete");
 }
 
 class $modify(BufPlayLayer, PlayLayer) {
@@ -7963,10 +7996,237 @@ namespace {
     }
 }
 
+namespace {
+    constexpr char const* PAUSE_BUTTON_X_KEY = "pause-button-x";
+    constexpr char const* PAUSE_BUTTON_Y_KEY = "pause-button-y";
+    constexpr float PAUSE_BUTTON_DRAG_SLOP = 12.f;
+    constexpr float PAUSE_BUTTON_TOUCH_PAD = 12.f;
+
+    CCRect pauseSafeArea() {
+        auto safeArea = geode::utils::getSafeAreaRect();
+        if (safeArea.size.width <= 1.f || safeArea.size.height <= 1.f) {
+            auto winSize = CCDirector::get()->getWinSize();
+            safeArea = CCRect(0.f, 0.f, winSize.width, winSize.height);
+        }
+        return safeArea;
+    }
+
+    CCNode* makePauseButtonFace(float size) {
+        auto* face = CCNode::create();
+        if (!face) {
+            return nullptr;
+        }
+        face->setContentSize(CCSize(size, size));
+        face->setAnchorPoint(CCPoint(0.5f, 0.5f));
+
+        // The halo is the logo itself, scaled up ring by ring, accent tinted and
+        // added instead of alpha blended. Every copy carries the icon
+        // silhouette, so the bloom follows the rounded square and the arrow
+        // instead of drawing a circle the icon sits inside of.
+        for (int ring = 5; ring >= 1; --ring) {
+            auto* copy = makeLogoMark(size);
+            if (!copy) {
+                break;
+            }
+            float const grow = 1.f + 0.048f * static_cast<float>(ring);
+            copy->setScale(copy->getScale() * grow);
+            copy->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            copy->setPosition(CCPoint(size * 0.5f, size * 0.5f));
+            copy->setColor(accentColor());
+            copy->setOpacity(static_cast<GLubyte>(14 + (5 - ring) * 14));
+            copy->setBlendFunc({ GL_SRC_ALPHA, GL_ONE });
+            face->addChild(copy, 0);
+        }
+
+        if (auto* logo = makeLogoMark(size)) {
+            logo->setAnchorPoint(CCPoint(0.5f, 0.5f));
+            logo->setPosition(CCPoint(size * 0.5f, size * 0.5f));
+            face->addChild(logo, 1);
+        }
+        return face;
+    }
+}
+
+class AfterflowPauseButton : public CCLayer {
+public:
+    static AfterflowPauseButton* create(float size) {
+        auto* node = new AfterflowPauseButton();
+        if (node && node->init(size)) {
+            node->autorelease();
+            return node;
+        }
+        CC_SAFE_DELETE(node);
+        return nullptr;
+    }
+
+    void settleAt(CCPoint const& fallback) {
+        auto safeArea = pauseSafeArea();
+        CCPoint target = fallback;
+        double savedX = Mod::get()->getSavedValue<double>(PAUSE_BUTTON_X_KEY, -1.0);
+        double savedY = Mod::get()->getSavedValue<double>(PAUSE_BUTTON_Y_KEY, -1.0);
+        if (savedX >= 0.0 && savedX <= 1.0 && savedY >= 0.0 && savedY <= 1.0) {
+            CCPoint world(
+                safeArea.getMinX() + static_cast<float>(savedX) * safeArea.size.width,
+                safeArea.getMinY() + static_cast<float>(savedY) * safeArea.size.height
+            );
+            target = windowToLocal(world);
+        }
+        setHomePosition(target);
+    }
+
+    bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
+        if (!touch || !m_face) {
+            return false;
+        }
+        CCPoint local = convertTouchToNodeSpace(touch);
+        float const reach = m_size * 0.5f + PAUSE_BUTTON_TOUCH_PAD;
+        float deltaX = local.x - m_home.x;
+        float deltaY = local.y - m_home.y;
+        if (deltaX * deltaX + deltaY * deltaY > reach * reach) {
+            return false;
+        }
+        m_dragging = true;
+        m_moved = false;
+        m_dragStart = local;
+        m_dragOffset = CCPoint(m_home.x - local.x, m_home.y - local.y);
+        m_face->stopAllActions();
+        m_face->runAction(CCScaleTo::create(0.08f, 0.9f));
+        return true;
+    }
+
+    void ccTouchMoved(CCTouch* touch, CCEvent*) override {
+        if (!m_dragging || !m_face || !touch) {
+            return;
+        }
+        CCPoint local = convertTouchToNodeSpace(touch);
+        float deltaX = local.x - m_dragStart.x;
+        float deltaY = local.y - m_dragStart.y;
+        if (!m_moved && deltaX * deltaX + deltaY * deltaY > PAUSE_BUTTON_DRAG_SLOP * PAUSE_BUTTON_DRAG_SLOP) {
+            m_moved = true;
+            m_face->stopAllActions();
+            m_face->runAction(CCScaleTo::create(0.08f, 1.08f));
+        }
+        if (!m_moved) {
+            return;
+        }
+        setHomePosition(CCPoint(local.x + m_dragOffset.x, local.y + m_dragOffset.y));
+    }
+
+    void ccTouchEnded(CCTouch* touch, CCEvent*) override {
+        if (!m_dragging) {
+            return;
+        }
+        m_dragging = false;
+        if (m_face) {
+            m_face->stopAllActions();
+            m_face->runAction(CCScaleTo::create(0.1f, 1.f));
+        }
+        if (m_moved) {
+            m_moved = false;
+            savePosition();
+            return;
+        }
+        // The panel tears down the pause layer from inside the touch callback;
+        // queue it so the dispatcher is done with this delegate first.
+        Loader::get()->queueInMainThread([] {
+            toggleAfterflowPanel();
+        });
+    }
+
+    void ccTouchCancelled(CCTouch*, CCEvent*) override {
+        m_dragging = false;
+        m_moved = false;
+        if (m_face) {
+            m_face->stopAllActions();
+            m_face->setScale(1.f);
+        }
+    }
+
+protected:
+    bool init(float size) {
+        if (!CCLayer::init()) {
+            return false;
+        }
+        auto winSize = CCDirector::get()->getWinSize();
+        setContentSize(winSize);
+        setAnchorPoint(CCPoint(0.f, 0.f));
+        setPosition(CCPoint(0.f, 0.f));
+        setTouchMode(kCCTouchesOneByOne);
+        setTouchPriority(-1001);
+        setTouchEnabled(true);
+
+        m_size = size;
+        m_home = CCPoint(winSize.width * 0.5f, winSize.height * 0.5f);
+        m_face = makePauseButtonFace(size);
+        if (m_face) {
+            m_face->setPosition(m_home);
+            addChild(m_face, 1);
+        }
+        return true;
+    }
+
+private:
+    void setHomePosition(CCPoint const& position) {
+        m_home = position;
+        clampHome();
+        if (m_face) {
+            m_face->setPosition(m_home);
+        }
+    }
+
+    void clampHome() {
+        auto safeArea = pauseSafeArea();
+        CCPoint low = windowToLocal(CCPoint(safeArea.getMinX(), safeArea.getMinY()));
+        CCPoint high = windowToLocal(CCPoint(safeArea.getMaxX(), safeArea.getMaxY()));
+        float const margin = m_size * 0.5f + 2.f;
+        float minX = std::min(low.x, high.x) + margin;
+        float maxX = std::max(low.x, high.x) - margin;
+        float minY = std::min(low.y, high.y) + margin;
+        float maxY = std::max(low.y, high.y) - margin;
+        if (maxX <= minX) {
+            minX = maxX = (low.x + high.x) * 0.5f;
+        }
+        if (maxY <= minY) {
+            minY = maxY = (low.y + high.y) * 0.5f;
+        }
+        m_home = CCPoint(std::clamp(m_home.x, minX, maxX), std::clamp(m_home.y, minY, maxY));
+    }
+
+    void savePosition() {
+        CCPoint world = localToWindow(m_home);
+        auto safeArea = pauseSafeArea();
+        double normalizedX = (world.x - safeArea.getMinX()) / std::max(1.f, safeArea.size.width);
+        double normalizedY = (world.y - safeArea.getMinY()) / std::max(1.f, safeArea.size.height);
+        Mod::get()->setSavedValue(PAUSE_BUTTON_X_KEY, std::clamp(normalizedX, 0.0, 1.0));
+        Mod::get()->setSavedValue(PAUSE_BUTTON_Y_KEY, std::clamp(normalizedY, 0.0, 1.0));
+    }
+
+    CCPoint windowToLocal(CCPoint const& world) {
+        auto* parent = getParent();
+        return parent ? parent->convertToNodeSpace(world) : world;
+    }
+
+    CCPoint localToWindow(CCPoint const& local) {
+        auto* parent = getParent();
+        return parent ? parent->convertToWorldSpace(local) : local;
+    }
+
+    float m_size = 0.f;
+    CCPoint m_home;
+    CCPoint m_dragStart;
+    CCPoint m_dragOffset;
+    bool m_dragging = false;
+    bool m_moved = false;
+    CCNode* m_face = nullptr;
+};
+
 class $modify(BufPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
         if (!isMobileHost()) {
+            return;
+        }
+        if (this->getChildByID("afterflow-pause-button"_spr)) {
             return;
         }
 
@@ -7989,39 +8249,23 @@ class $modify(BufPauseLayer, PauseLayer) {
             return;
         }
 
-        auto* face = CCNode::create();
-        face->setContentSize(CCSize(width, height));
-        face->setAnchorPoint(CCPoint(0.5f, 0.5f));
-        float diameter = std::min(width, height);
-        auto* disc = makeDrawNode();
-        disc->drawCircle(CCPoint(width / 2.f, height / 2.f), diameter / 2.f - 1.f, color4(22, 22, 26, 235), 1.5f, color4(accentColor(), 255), 48);
-        face->addChild(disc);
-        if (auto* logo = makeLogoMark(diameter * 0.72f)) {
-            logo->setPosition(CCPoint(width / 2.f, height / 2.f));
-            face->addChild(logo, 1);
-        }
-
-        auto* button = CCMenuItemSpriteExtra::create(face, this, menu_selector(BufPauseLayer::onAfterflowButton));
-        button->setID("afterflow-button"_spr);
-
+        float size = std::min(width, height) * 0.9f;
         CCPoint worldPosition = settingsButton->getParent()->convertToWorldSpace(settingsButton->getPosition());
         CCPoint localPosition = this->convertToNodeSpace(worldPosition);
-        float gap = 6.f;
-        CCPoint target(localPosition.x, localPosition.y - height - gap);
-        if (target.y - height / 2.f < 4.f) {
-            target = CCPoint(localPosition.x - width - gap, localPosition.y);
+
+        float const gap = 8.f;
+        CCPoint fallback(localPosition.x, localPosition.y - height * 0.5f - gap - size * 0.5f);
+        if (fallback.y - size * 0.5f < 4.f) {
+            fallback = CCPoint(localPosition.x - width * 0.5f - gap - size * 0.5f, localPosition.y);
         }
 
-        auto* menu = CCMenu::create();
-        menu->setID("afterflow-menu"_spr);
-        menu->setPosition(CCPoint(0.f, 0.f));
-        button->setPosition(target);
-        menu->addChild(button);
-        this->addChild(menu, 100);
-    }
-
-    void onAfterflowButton(CCObject*) {
-        toggleAfterflowPanel();
+        auto* button = AfterflowPauseButton::create(size);
+        if (!button) {
+            return;
+        }
+        button->setID("afterflow-pause-button"_spr);
+        this->addChild(button, 100);
+        button->settleAt(fallback);
     }
 };
 
@@ -8034,6 +8278,11 @@ class $modify(BufMenuLayer, MenuLayer) {
         this->runAction(CCSequence::create(
             CCDelayTime::create(0.2f),
             CallFuncExt::create([] {
+                // Version check moved off mod load: on iOS the loader is still
+                // bringing up its runtime when mods load, and starting a web
+                // request there is the first thing that can run too early.
+                log::info("afterflow: menu ready");
+                checkForUpdates(true);
                 if (!showUpdatePopup()) {
                     showKeybindIntro();
                 }

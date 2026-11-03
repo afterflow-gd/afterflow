@@ -8,7 +8,7 @@
   },
   "id": "afterflow.prsevend",
   "name": "Afterflow",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "developer": "prsevend",
   "description": "a predictive input cheat that fixes your early clicks and makes them accurate, with customizable UI colors and a polished control panel.",
   "tags": [
@@ -90,25 +90,25 @@
       "type": "color",
       "name": "primary color",
       "description": "primary gradient color for the panel",
-      "default": "#7C4DFF"
+      "default": "#A855F7"
     },
     "ui-secondary-color": {
       "type": "color",
       "name": "secondary color",
       "description": "secondary gradient color for the panel",
-      "default": "#FFFFFF"
+      "default": "#D5B4FF"
     },
     "ui-surface-color": {
       "type": "color",
       "name": "surface color",
       "description": "background color of the panel card",
-      "default": "#16161A"
+      "default": "#17131F"
     },
     "ui-text-color": {
       "type": "color",
       "name": "text color",
       "description": "color used for all panel text",
-      "default": "#E8E9EE"
+      "default": "#EFE7F7"
     },
     "ui-glow": {
       "type": "bool",
