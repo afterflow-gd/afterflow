@@ -2724,6 +2724,10 @@ finally {
         node->drawPolygon(filtered, static_cast<unsigned int>(filteredCount), fill, borderWidth, border);
     }
 
+    CCRect stageKeyRect() {
+        return CCRect(CONTENT_RIGHT - 22.f - 150.f, STAGE_HINT_Y - 12.f, 150.f, 24.f);
+    }
+
     CCRect customAddRect() {
         return CCRect(CONTENT_RIGHT - 22.f - 104.f, STAGE_META_Y - 15.f, 104.f, 30.f);
     }
@@ -2903,6 +2907,25 @@ finally {
             return fmt::format("custom {}", index - STAGE_TABLE_SIZE + 1);
         }
         return stageLabelAt(index);
+    }
+
+    std::string stageKeySetting(int index) {
+        if (index >= 0 && index < STAGE_TABLE_SIZE) {
+            return fmt::format("stage-key-{}", stageName(index));
+        }
+        int custom = index - STAGE_TABLE_SIZE;
+        if (custom >= 0 && custom < CUSTOM_STAGE_LIMIT) {
+            return fmt::format("stage-key-c{}", custom + 1);
+        }
+        return {};
+    }
+
+    std::string stageKeyText(int index) {
+        auto setting = stageKeySetting(index);
+        if (setting.empty()) {
+            return "unbound";
+        }
+        return lowercaseText(keybindList(setting));
     }
 
     void fitLabelToWidth(CCLabelBMFont* label, float maxWidth) {
@@ -3097,6 +3120,7 @@ finally {
     constexpr int TF_SLIDER = 10;
     constexpr int TF_SWATCHES = 11;
     constexpr int TF_CONFIG = 12;
+    constexpr int TF_STAGEKEY = 13;
 
     struct TutorialStep {
         std::string title;
@@ -3149,6 +3173,15 @@ finally {
             "remove deletes the selected custom stage.",
             "going over 120 ticks may lag or work worse.",
         }, TF_CUSTOM, false, TF_CUSTOM, TF_SLIDER });
+        if (!mobile) {
+            steps.push_back({ "stage keys", 1, {
+                "every stage can have its own key.",
+                "press it anywhere to jump straight to that stage.",
+                "tap the key button to set or change it",
+                "(modifiers like ctrl + x work too).",
+                "custom keys follow the slot: c1, c2, c3, c4.",
+            }, TF_STAGEKEY, false, TF_STAGEKEY, TF_NONE });
+        }
         steps.push_back({ "settings tab", -1, {
             "pick a theme to change the panel colors.",
             "glow turns the soft glow behind the panel on or off.",
@@ -3190,6 +3223,7 @@ finally {
             case TF_COPY: return CCRect(COPY_X, COPY_Y, COPY_WIDTH, COPY_HEIGHT);
             case TF_STAGETRACK: return CCRect(STAGE_TRACK_X, STAGE_TRACK_Y, STAGE_TRACK_WIDTH, STAGE_TRACK_HEIGHT);
             case TF_CUSTOM: return customAddRect();
+            case TF_STAGEKEY: return stageKeyRect();
             case TF_SLIDER: return CCRect(
                 STAGE_BAR_X - 2.f, STAGE_TIMING_WAVE_Y - 20.f,
                 STAGE_BAR_WIDTH + 14.f, STAGE_TIMING_ALL_Y - STAGE_TIMING_WAVE_Y + 40.f
@@ -3285,6 +3319,7 @@ finally {
             ImportConfig,
             ExportConfig,
             ReplayTutorial,
+            StageKey,
             Credits,
             ModeIcon,
             ModeIconAdd,
@@ -3339,6 +3374,8 @@ finally {
         void resumeFromPanel();
         void removePauseLayers();
         void updateHints();
+        void openStageKeySettings();
+        void watchSettingsPopup(float dt);
         void tickRefresh(float dt);
 
         CCLayerColor* m_scrim = nullptr;
@@ -3437,6 +3474,10 @@ finally {
         CCNode* m_tutorialButton = nullptr;
         CCNode* m_creditsButton = nullptr;
         CCNode* m_creditsLayer = nullptr;
+        CCNode* m_stageKeyButton = nullptr;
+        CCLabelBMFont* m_stageKeyLabel = nullptr;
+        bool m_awaitingSettings = false;
+        int m_settingsWaitFrames = 0;
         CCNode* m_logLayer = nullptr;
         CCNode* m_logExpandButton = nullptr;
         CCLabelBMFont* m_logViewLines[LOG_VIEW_LINE_COUNT] = {};
@@ -3572,6 +3613,8 @@ finally {
         m_exportButton = nullptr;
         m_tutorialButton = nullptr;
         m_creditsButton = nullptr;
+        m_stageKeyButton = nullptr;
+        m_stageKeyLabel = nullptr;
         m_creditsLayer = nullptr;
         m_logExpandButton = nullptr;
         m_logLayer = nullptr;
@@ -3816,6 +3859,13 @@ finally {
             removeLabel->setPosition(CCPoint(removeRect.getMidX(), removeRect.getMidY()));
             m_deck->addChild(removeLabel, 3);
             m_customRemoveLabel = removeLabel;
+        }
+
+        if (!isMobileHost()) {
+            m_stageKeyButton = makeDeckButton(m_deck, stageKeyRect(), "key: unbound", false, false, 0.5f, true);
+            if (m_stageKeyButton) {
+                m_stageKeyLabel = m_stageKeyButton->getChildByType<CCLabelBMFont>(0);
+            }
         }
 
         m_settingsHeaderLabel = makeLabel("appearance", true, 0.62f, logTextColor());
@@ -4380,6 +4430,7 @@ finally {
             if (m_tickBtnLabels[i]) { m_tickBtnLabels[i]->setVisible(showStage && customStageFor(state.stageIndex)); }
         }
         if (m_customAddLabel) { m_customAddLabel->setVisible(showStage); }
+        if (m_stageKeyButton) { m_stageKeyButton->setVisible(showStage); }
         if (m_customRemoveLabel) { m_customRemoveLabel->setVisible(showStage && customStageFor(state.stageIndex)); }
         if (m_stageBackButton) { m_stageBackButton->setVisible(false); }
         if (m_stageForwardButton) { m_stageForwardButton->setVisible(false); }
@@ -4678,6 +4729,9 @@ finally {
                 else {
                     m_stageTimingLabels[2]->setString("custom stage limit reached");
                 }
+                m_stageTimingLabels[2]->setScale(0.60f * getUIFontScale());
+                float hintRight = m_stageKeyButton ? stageKeyRect().getMinX() - 12.f : CONTENT_RIGHT - 22.f;
+                fitLabelToWidth(m_stageTimingLabels[2], hintRight - (LOG_X + 22.f));
             }
         }
 
@@ -4686,6 +4740,11 @@ finally {
         }
         if (m_stageTimingLabels[1]) {
             m_stageTimingLabels[1]->setColor(state.isEnabled ? softTextColor() : warningColor());
+        }
+        if (m_stageKeyLabel) {
+            m_stageKeyLabel->setString(fmt::format("key: {}", stageKeyText(state.stageIndex)).c_str());
+            m_stageKeyLabel->setScale(0.5f * getUIFontScale());
+            fitLabelToWidth(m_stageKeyLabel, stageKeyRect().size.width - 14.f);
         }
 
         auto logs = recentLogSnapshot();
@@ -4930,7 +4989,46 @@ finally {
         }
     }
 
+    void AfterflowOverlay::openStageKeySettings() {
+        if (m_awaitingSettings) {
+            return;
+        }
+        endTickEdit();
+        restorePressed();
+        // Hide the deck (game stays paused) while Geode's settings popup is up,
+        // then bring it back once the popup and any keybind picker are closed.
+        m_awaitingSettings = true;
+        m_settingsWaitFrames = 0;
+        setVisible(false);
+        setTouchEnabled(false);
+        say("set the key for {} under stage-key-* in the settings", stageTitleAt(state.stageIndex));
+        openSettingsPopup(Mod::get());
+        schedule(schedule_selector(AfterflowOverlay::watchSettingsPopup));
+    }
+
+    void AfterflowOverlay::watchSettingsPopup(float) {
+        if (!m_awaitingSettings) {
+            unschedule(schedule_selector(AfterflowOverlay::watchSettingsPopup));
+            return;
+        }
+        if (++m_settingsWaitFrames < 5) {
+            return;
+        }
+        auto* scene = CCScene::get();
+        if (scene && findDescendant<FLAlertLayer>(scene)) {
+            return;
+        }
+        unschedule(schedule_selector(AfterflowOverlay::watchSettingsPopup));
+        m_awaitingSettings = false;
+        setVisible(true);
+        setTouchEnabled(true);
+        refresh();
+    }
+
     void AfterflowOverlay::togglePanel() {
+        if (m_awaitingSettings) {
+            return;
+        }
         if (m_isOpen) {
             closePanel();
         }
@@ -4958,6 +5056,11 @@ finally {
     }
 
     void AfterflowOverlay::onExit() {
+        if (m_awaitingSettings) {
+            m_awaitingSettings = false;
+            unschedule(schedule_selector(AfterflowOverlay::watchSettingsPopup));
+            setVisible(true);
+        }
         m_isOpen = false;
         m_didPauseForPanel = false;
         m_isDraggingLauncher = false;
@@ -5881,6 +5984,9 @@ finally {
             return HitTarget::Credits;
         }
         if (m_activeTab == 1) {
+            if (m_stageKeyButton && stageKeyRect().containsPoint(point)) {
+                return HitTarget::StageKey;
+            }
             if (customAddRect().containsPoint(point)) {
                 return HitTarget::StageAdd;
             }
@@ -5925,6 +6031,7 @@ finally {
             case HitTarget::ExportConfig: return m_exportButton;
             case HitTarget::ReplayTutorial: return m_tutorialButton;
             case HitTarget::Credits: return m_creditsButton;
+            case HitTarget::StageKey: return m_stageKeyButton;
             default: return nullptr;
         }
     }
@@ -5979,6 +6086,11 @@ finally {
 
         if (target == HitTarget::Credits) {
             buildCreditsLayer();
+            return;
+        }
+
+        if (target == HitTarget::StageKey) {
+            openStageKeySettings();
             return;
         }
 
@@ -7735,6 +7847,35 @@ finally {
         }
     }
 
+    void jumpToStage(int stageIndex) {
+        if (stageIndex < 0 || stageIndex >= stageTotalCount()) {
+            return;
+        }
+        if (stageIndex == state.stageIndex) {
+            return;
+        }
+        setStageIndex(stageIndex);
+        say("{} -> {}", stageKeyText(stageIndex), stageBanner());
+    }
+
+    void setupStageKeybinds() {
+        if (isMobileHost()) {
+            return;
+        }
+        for (int index = 0; index < STAGE_TABLE_SIZE + CUSTOM_STAGE_LIMIT; ++index) {
+            auto setting = stageKeySetting(index);
+            if (setting.empty()) {
+                continue;
+            }
+            listenForKeybindSettingPresses(setting, [index](Keybind const&, bool isDown, bool isRepeat, double) {
+                if (isDown && !isRepeat) {
+                    jumpToStage(index);
+                }
+                return true;
+            });
+        }
+    }
+
     void startCycleWatcher() {
         std::error_code errorCode;
         std::filesystem::remove(cycleTriggerPath(), errorCode);
@@ -7816,7 +7957,11 @@ $on_mod(Loaded) {
         Mod::get()->setSavedValue("stage", savedStageIndex);
         Mod::get()->setSavedValue("stage-schema", STAGE_SCHEMA_VERSION);
     }
-    state.stageIndex = savedStageIndex;
+    (void)savedStageIndex;
+    // Always start on raw (buffer off) when the game launches. The stage keys,
+    // the cycle key or the panel switch to another stage after that.
+    state.stageIndex = STAGE_TABLE_SIZE - 1;
+    Mod::get()->setSavedValue("stage", state.stageIndex);
     readSettings();
     applyStage();
     removeLegacyTerminalLogs();
@@ -7825,6 +7970,7 @@ $on_mod(Loaded) {
         startCycleWatcher();
     }
     setupKeybinds();
+    setupStageKeybinds();
     static auto sceneListener = SceneEvent().listen([](CCScene* scene) {
         attachAfterflowOverlay(scene);
     });
