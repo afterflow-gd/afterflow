@@ -3280,6 +3280,8 @@ finally {
             Tab,
             Chip,
             Theme,
+            DragPanel,
+            Resize,
             SettingsRow,
             SettingsStep,
             ImportConfig,
@@ -3311,6 +3313,11 @@ finally {
         void updateModeIcons();
         void setConfigStatus(std::string const& text, bool ok);
         void layout();
+        CCPoint clampDeckPosition(CCPoint const& position, float scale) const;
+        CCPoint savedDeckPosition() const;
+        void saveDeckPlacement();
+        void resetDeckPlacement();
+        void finishDeckGesture();
         CCPoint defaultLauncherPosition() const;
         CCPoint clampLauncherPosition(CCPoint const& position) const;
         void saveLauncherPosition();
@@ -3467,6 +3474,15 @@ finally {
         CCPoint m_launcherDragStart;
         CCPoint m_launcherDragOffset;
         float m_deckScale = 1.f;
+        float m_baseScale = 1.f;
+        float m_fitScale = 1.f;
+        double m_lastGripTap = -10.0;
+        bool m_draggingDeck = false;
+        bool m_resizingDeck = false;
+        bool m_deckMoved = false;
+        CCPoint m_dragTouchStart;
+        CCPoint m_dragDeckStart;
+        CCPoint m_resizeTL;
         bool m_isOpen = false;
         bool m_didPauseForPanel = false;
         bool m_isDraggingLauncher = false;
@@ -3641,6 +3657,11 @@ finally {
         m_deck->addChild(m_shell, 1);
         drawCurvedRect(m_shell, CCRect(-12.f, -22.f, DECK_WIDTH + 24.f, DECK_HEIGHT + 22.f), DECK_RADIUS + 6.f, color4(0, 0, 0, 72), none, 0.f);
         drawCurvedRect(m_shell, CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT), DECK_RADIUS, color4(shellTint, 252), panelTint(26), 1.f);
+        // resize grip, bottom right corner
+        for (int k = 0; k < 3; ++k) {
+            float o = 8.f + static_cast<float>(k) * 5.f;
+            m_shell->drawSegment(CCPoint(DECK_WIDTH - o, 6.f), CCPoint(DECK_WIDTH - 6.f, o), 1.1f, color4(255, 255, 255, 80));
+        }
         drawCurvedRect(m_shell, CCRect(CONTENT_X, CARD_BOTTOM, CONTENT_WIDTH, CARD_HEIGHT), CARD_RADIUS, color4(surface, 255), panelTint(18), 1.f);
 
         m_tabBar = makeDrawNode();
@@ -3970,9 +3991,14 @@ finally {
 
         float fitScale = std::min(0.86f * safeArea.size.width / DECK_WIDTH, 0.86f * safeArea.size.height / DECK_HEIGHT);
         float comfortableScale = std::min(fitScale, 0.94f);
-        m_deckScale = std::min(std::max(comfortableScale * getUIPanelScale(), 0.2f), fitScale);
+        m_fitScale = std::max(fitScale, 0.2f);
+        m_baseScale = comfortableScale * getUIPanelScale();
+        // the grip stores its size as a multiplier of the base scale so it keeps
+        // meaning after the safe area (and with it the fit cap) changes
+        double userMul = std::clamp(Mod::get()->getSavedValue<double>("panel-user-mul", 1.0), 0.1, 8.0);
+        m_deckScale = std::min(std::max(m_baseScale * static_cast<float>(userMul), 0.2f), fitScale);
         m_deck->setScale(m_deckScale);
-        m_deck->setPosition(CCPoint(safeArea.getMidX(), safeArea.getMidY()));
+        m_deck->setPosition(clampDeckPosition(savedDeckPosition(), m_deckScale));
 
         double savedX = Mod::get()->getSavedValue<double>("ui-button-x", -1.0);
         double savedY = Mod::get()->getSavedValue<double>("ui-button-y", -1.0);
@@ -3987,6 +4013,70 @@ finally {
         }
         m_launcherPosition = clampLauncherPosition(m_launcherPosition);
         m_launcher->setPosition(m_launcherPosition);
+    }
+
+    CCPoint AfterflowOverlay::clampDeckPosition(CCPoint const& position, float scale) const {
+        float halfW = DECK_WIDTH * 0.5f * scale;
+        float halfH = DECK_HEIGHT * 0.5f * scale;
+        float minX = m_safeArea.getMinX() + halfW;
+        float maxX = m_safeArea.getMaxX() - halfW;
+        float minY = m_safeArea.getMinY() + halfH;
+        float maxY = m_safeArea.getMaxY() - halfH;
+        // a deck wider than the safe area inverts the range, and std::clamp with
+        // lo > hi is undefined, so pin that axis to the centre instead
+        if (maxX < minX) { minX = maxX = m_safeArea.getMidX(); }
+        if (maxY < minY) { minY = maxY = m_safeArea.getMidY(); }
+        return CCPoint(std::clamp(position.x, minX, maxX), std::clamp(position.y, minY, maxY));
+    }
+
+    CCPoint AfterflowOverlay::savedDeckPosition() const {
+        double fx = Mod::get()->getSavedValue<double>("panel-pos-x", 0.5);
+        double fy = Mod::get()->getSavedValue<double>("panel-pos-y", 0.5);
+        fx = std::clamp(fx, 0.0, 1.0);
+        fy = std::clamp(fy, 0.0, 1.0);
+        return CCPoint(
+            m_safeArea.getMinX() + static_cast<float>(fx) * m_safeArea.size.width,
+            m_safeArea.getMinY() + static_cast<float>(fy) * m_safeArea.size.height
+        );
+    }
+
+    void AfterflowOverlay::saveDeckPlacement() {
+        auto pos = m_deck->getPosition();
+        float width = std::max(1.f, m_safeArea.size.width);
+        float height = std::max(1.f, m_safeArea.size.height);
+        Mod::get()->setSavedValue<double>("panel-pos-x", (pos.x - m_safeArea.getMinX()) / width);
+        Mod::get()->setSavedValue<double>("panel-pos-y", (pos.y - m_safeArea.getMinY()) / height);
+        Mod::get()->setSavedValue<double>("panel-user-mul", m_deckScale / std::max(m_baseScale, 0.001f));
+    }
+
+    void AfterflowOverlay::resetDeckPlacement() {
+        Mod::get()->setSavedValue<double>("panel-pos-x", 0.5);
+        Mod::get()->setSavedValue<double>("panel-pos-y", 0.5);
+        Mod::get()->setSavedValue<double>("panel-user-mul", 1.0);
+        layout();
+    }
+
+    void AfterflowOverlay::finishDeckGesture() {
+        bool wasResize = m_resizingDeck;
+        bool wasMoved = m_deckMoved;
+        m_draggingDeck = false;
+        m_resizingDeck = false;
+        m_deckMoved = false;
+        m_pressedTarget = HitTarget::None;
+        if (wasMoved) {
+            saveDeckPlacement();
+        }
+        else if (wasResize) {
+            // double tap on the grip restores the default size and spot
+            double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (now - m_lastGripTap < 0.45) {
+                m_lastGripTap = -10.0;
+                resetDeckPlacement();
+            }
+            else {
+                m_lastGripTap = now;
+            }
+        }
     }
 
     CCPoint AfterflowOverlay::defaultLauncherPosition() const {
@@ -5044,6 +5134,26 @@ finally {
             if (m_editingRow >= 0 && !(m_pressedTarget == HitTarget::TickField && stageSlot == m_editingRow)) {
                 endTickEdit();
             }
+            if (m_pressedTarget == HitTarget::DragPanel || m_pressedTarget == HitTarget::Resize) {
+                m_deck->stopAllActions();
+                m_deck->setScale(m_deckScale);
+                m_deckMoved = false;
+                m_dragTouchStart = convertTouchToNodeSpace(touch);
+                auto deckPos = m_deck->getPosition();
+                if (m_pressedTarget == HitTarget::DragPanel) {
+                    m_draggingDeck = true;
+                    m_dragDeckStart = deckPos;
+                }
+                else {
+                    m_resizingDeck = true;
+                    // the opposite (top left) corner stays put while the grip moves
+                    m_resizeTL = CCPoint(
+                        deckPos.x - DECK_WIDTH * 0.5f * m_deckScale,
+                        deckPos.y + DECK_HEIGHT * 0.5f * m_deckScale
+                    );
+                }
+                return true;
+            }
             if (m_pressedTarget == HitTarget::TickSlider) {
                 m_draggingSlider = true;
                 m_sliderRow = stageSlot;
@@ -5091,6 +5201,36 @@ finally {
             }
             m_launcherPosition = clampLauncherPosition(CCPoint(local.x + m_launcherDragOffset.x, local.y + m_launcherDragOffset.y));
             m_launcher->setPosition(m_launcherPosition);
+            return;
+        }
+
+        if (m_draggingDeck || m_resizingDeck) {
+            CCPoint local = convertTouchToNodeSpace(touch);
+            float deltaX = local.x - m_dragTouchStart.x;
+            float deltaY = local.y - m_dragTouchStart.y;
+            if (deltaX * deltaX + deltaY * deltaY > 25.f) {
+                m_deckMoved = true;
+            }
+            if (m_draggingDeck) {
+                m_deck->setPosition(clampDeckPosition(
+                    CCPoint(m_dragDeckStart.x + deltaX, m_dragDeckStart.y + deltaY), m_deckScale
+                ));
+            }
+            else if (m_deckMoved) {
+                // bottom right corner follows the finger, top left stays put
+                float scaleX = (local.x - m_resizeTL.x) / DECK_WIDTH;
+                float scaleY = (m_resizeTL.y - local.y) / DECK_HEIGHT;
+                float newScale = std::clamp((scaleX + scaleY) * 0.5f, 0.2f, m_fitScale);
+                m_deckScale = newScale;
+                m_deck->setScale(newScale);
+                m_deck->setPosition(clampDeckPosition(
+                    CCPoint(
+                        m_resizeTL.x + DECK_WIDTH * 0.5f * newScale,
+                        m_resizeTL.y - DECK_HEIGHT * 0.5f * newScale
+                    ),
+                    newScale
+                ));
+            }
             return;
         }
 
@@ -5157,6 +5297,11 @@ finally {
             else {
                 openPanel();
             }
+            return;
+        }
+
+        if (m_draggingDeck || m_resizingDeck) {
+            finishDeckGesture();
             return;
         }
 
@@ -5258,6 +5403,10 @@ finally {
     }
 
     void AfterflowOverlay::ccTouchCancelled(CCTouch*, CCEvent*) {
+        if (m_draggingDeck || m_resizingDeck) {
+            finishDeckGesture();
+            return;
+        }
         m_logDragging = false;
         m_logDragMoved = false;
         m_logViewDragging = false;
@@ -5807,6 +5956,9 @@ finally {
     }
 
     AfterflowOverlay::HitTarget AfterflowOverlay::hitTest(CCPoint const& point, int* stageSlot) const {
+        if (CCRect(DECK_WIDTH - 38.f, 0.f, 38.f, 26.f).containsPoint(point)) {
+            return HitTarget::Resize;
+        }
         if (logoRect().containsPoint(point)) {
             return HitTarget::Logo;
         }
@@ -5909,6 +6061,10 @@ finally {
                     }
                 }
             }
+        }
+        // the empty part of the top bar drags the whole panel
+        if (point.y >= DECK_HEIGHT - 54.f) {
+            return HitTarget::DragPanel;
         }
         return HitTarget::None;
     }
