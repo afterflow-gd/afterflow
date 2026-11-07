@@ -7980,6 +7980,15 @@ finally {
     }
 }
 
+#define AFTERFLOW_PHASE(name)                       \
+    do {                                            \
+        static bool phaseShown = false;             \
+        if (!phaseShown) {                          \
+            phaseShown = true;                      \
+            log::info("afterflow: {}", name);       \
+        }                                           \
+    } while (false)
+
 $on_mod(Loaded) {
 
     // Breadcrumbs: if the game dies during startup on a platform we cannot
@@ -7999,12 +8008,14 @@ $on_mod(Loaded) {
     state.stageIndex = savedStageIndex;
     readSettings();
     applyStage();
+    AFTERFLOW_PHASE("settings applied");
     removeLegacyTerminalLogs();
     resetTerminalLog();
     if (!isMobileHost()) {
         startCycleWatcher();
     }
     setupKeybinds();
+    AFTERFLOW_PHASE("keybinds ready");
     static auto sceneListener = SceneEvent().listen([](CCScene* scene) {
         attachAfterflowOverlay(scene);
     });
@@ -8039,6 +8050,7 @@ $on_mod(Loaded) {
     (void)secondaryColorListener;
     (void)panelScaleListener;
     (void)fontScaleListener;
+    AFTERFLOW_PHASE("listeners ready");
     say("starting mode: {}", stageBanner());
     say("{} cycles anywhere: 2/2 -> 4/4 -> 8/8 -> 16/8 -> 24/12 -> 32/16 -> 40/20 -> off", stageKey());
     if (isMobileHost()) {
@@ -8464,6 +8476,7 @@ class $modify(BufMenuLayer, MenuLayer) {
         if (!MenuLayer::init()) {
             return false;
         }
+        AFTERFLOW_PHASE("menu init");
 
         this->runAction(CCSequence::create(
             CCDelayTime::create(0.2f),
@@ -8480,6 +8493,7 @@ class $modify(BufMenuLayer, MenuLayer) {
             nullptr
         ));
         scheduleAfterflowOverlay(this);
+        AFTERFLOW_PHASE("menu scheduled");
         return true;
     }
 };
@@ -8620,6 +8634,7 @@ class $modify(BufPlayerObject, PlayerObject) {
         if (!ghostEffect()) PlayerObject::playBumpEffect(gameObjectType, gameObject);
     }
 
+#ifndef GEODE_IS_IOS
     void playSpawnEffect() {
         if (!ghostEffect()) PlayerObject::playSpawnEffect();
     }
@@ -8651,6 +8666,7 @@ class $modify(BufPlayerObject, PlayerObject) {
     void runNormalRotation(bool isNotNormalMode, float speedValue) {
         if (!ghostEffect()) PlayerObject::runNormalRotation(isNotNormalMode, speedValue);
     }
+#endif
 
     void toggleGhostEffect(GhostType ghostType) {
         if (!ghostEffect()) PlayerObject::toggleGhostEffect(ghostType);

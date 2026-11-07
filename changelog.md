@@ -1,6 +1,9 @@
 # v2.2.6-beta
 
 - bumped version to `2.2.6-beta` (mod.json, version.txt). CMakeLists.txt stays numeric at `2.2.6` because CMake's `project(VERSION)` rejects prerelease tags.
+- [ios] the built dylib is ad-hoc signed after linking, so launchers that refuse unsigned mods no longer stop it with a missing code signature.
+- [ios] the eight ghost-visual player effects (spawn flash, streaks, spider run, rotations) are left out on iOS, where they crash Geode's no-JIT helper on the loading screen. prediction is unaffected and other platforms keep them.
+- [hardening] startup breadcrumbs now also mark settings, keybinds, listeners, menu init and menu scheduling.
 - [hardening] startup breadcrumbs now log the build version and the type of the first scene the panel is built on, so a crash report identifies the exact build and scene.
 - [hardening] the update-progress overlay and the panel toggle now skip building while a scene transition (`CCTransitionScene`) is running, so the panel is never parented into a transition's subtree.
 - [hardening] ghost players are now dropped when the play layer leaves the scene (`PlayLayer::onExit`), not only on quit, so they are released before the play layer is destroyed.
