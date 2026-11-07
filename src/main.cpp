@@ -21,7 +21,6 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 #include <Geode/modify/RingObject.hpp>
-#include <Geode/binding/CCTransitionScene.hpp>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
