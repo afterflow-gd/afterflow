@@ -1569,7 +1569,7 @@ finally {
 
     void showUpdateOverlay() {
         auto* scene = cocos2d::CCScene::get();
-        if (!scene || updateOverlay.layer) {
+        if (!scene || typeinfo_cast<CCTransitionScene*>(scene) || updateOverlay.layer) {
             return;
         }
         auto* layer = UpdateOverlayLayer::create();
@@ -6610,7 +6610,7 @@ finally {
 
     void toggleAfterflowPanel() {
         auto* scene = CCScene::get();
-        if (!scene) {
+        if (!scene || typeinfo_cast<CCTransitionScene*>(scene)) {
             return;
         }
         auto* overlay = scene->getChildByType<AfterflowOverlay>(0);
