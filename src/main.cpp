@@ -36,6 +36,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1568,7 +1569,7 @@ finally {
 
     void showUpdateOverlay() {
         auto* scene = cocos2d::CCScene::get();
-        if (!scene || updateOverlay.layer) {
+        if (!scene || typeinfo_cast<CCTransitionScene*>(scene) || updateOverlay.layer) {
             return;
         }
         auto* layer = UpdateOverlayLayer::create();
@@ -6543,7 +6544,7 @@ finally {
         static bool announcedBuild = false;
         if (!announcedBuild) {
             announcedBuild = true;
-            log::info("afterflow: building overlay on first scene");
+            log::info("afterflow: building overlay on first scene ({})", typeid(*scene).name());
         }
         auto* overlay = AfterflowOverlay::create();
         if (!overlay) {
@@ -6609,7 +6610,7 @@ finally {
 
     void toggleAfterflowPanel() {
         auto* scene = CCScene::get();
-        if (!scene) {
+        if (!scene || typeinfo_cast<CCTransitionScene*>(scene)) {
             return;
         }
         auto* overlay = scene->getChildByType<AfterflowOverlay>(0);
@@ -7984,6 +7985,7 @@ $on_mod(Loaded) {
     // Breadcrumbs: if the game dies during startup on a platform we cannot
     // debug locally, the last line of the geode log points at the stage.
     log::info("afterflow: load start ({})", hostOSName());
+    log::info("afterflow: version {}", Mod::get()->getVersion().toVString());
 
     constexpr int STAGE_SCHEMA_VERSION = 2;
     int savedStageIndex = std::clamp(Mod::get()->getSavedValue<int>("stage", 0), 0, stageTotalCount() - 1);
@@ -8104,6 +8106,16 @@ class $modify(BufPlayLayer, PlayLayer) {
         resetPending();
         dropGhosts();
         PlayLayer::onQuit();
+    }
+
+    void onExit() {
+        // onQuit is not the only teardown path: onExit always runs when the play
+        // scene leaves the graph, including exits that never call onQuit. The
+        // ghosts retain a raw pointer to this PlayLayer as their game layer, so
+        // drop them before onExit walks the subtree and the PlayLayer dies.
+        resetPending();
+        dropGhosts();
+        PlayLayer::onExit();
     }
 
     void resetLevel() {

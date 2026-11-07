@@ -1,3 +1,10 @@
+# v2.2.6-beta
+
+- bumped version to `2.2.6-beta` (mod.json, version.txt, CMakeLists).
+- [hardening] startup breadcrumbs now log the build version and the type of the first scene the panel is built on, so a crash report identifies the exact build and scene.
+- [hardening] the update-progress overlay and the panel toggle now skip building while a scene transition (`CCTransitionScene`) is running, so the panel is never parented into a transition's subtree.
+- [hardening] ghost players are now dropped when the play layer leaves the scene (`PlayLayer::onExit`), not only on quit, so they are released before the play layer is destroyed.
+
 # v2.2.4
 
 - **fix: ios crash at the end of the loading bar.** the panel was being built from `CCDirector::willSwitchToScene`, i.e. in the middle of the loading screen -> menu transition, and allocating fonts and sprites there is what kills ios. the overlay is now built on the next main thread tick, against whichever scene is running by then.
