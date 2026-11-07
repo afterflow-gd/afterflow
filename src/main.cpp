@@ -36,6 +36,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -6543,7 +6544,7 @@ finally {
         static bool announcedBuild = false;
         if (!announcedBuild) {
             announcedBuild = true;
-            log::info("afterflow: building overlay on first scene");
+            log::info("afterflow: building overlay on first scene ({})", typeid(*scene).name());
         }
         auto* overlay = AfterflowOverlay::create();
         if (!overlay) {
@@ -7984,6 +7985,7 @@ $on_mod(Loaded) {
     // Breadcrumbs: if the game dies during startup on a platform we cannot
     // debug locally, the last line of the geode log points at the stage.
     log::info("afterflow: load start ({})", hostOSName());
+    log::info("afterflow: version {}", Mod::get()->getVersion().toVString());
 
     constexpr int STAGE_SCHEMA_VERSION = 2;
     int savedStageIndex = std::clamp(Mod::get()->getSavedValue<int>("stage", 0), 0, stageTotalCount() - 1);
