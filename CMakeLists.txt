@@ -43,6 +43,13 @@ add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 # Set up dependencies, resources, and link Geode.
 setup_geode_mod(${PROJECT_NAME})
 
+if ("${CMAKE_SYSTEM_NAME}" STREQUAL "iOS" OR IOS)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND codesign --force --sign - "$<TARGET_FILE:${PROJECT_NAME}>"
+        VERBATIM
+    )
+endif()
+
 # ---------------------------------------------------------------------------
 # Stale-extraction guard
 #

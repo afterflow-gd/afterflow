@@ -6640,6 +6640,7 @@ finally {
         state.isInjecting = false;
         state.rapidInputTicks = 0;
         state.wasAutoReleased = false;
+        state.ghostLayerBaseIndex = 0;
         state.pathDrawNode = nullptr;
         resetPending();
     }
@@ -6647,9 +6648,15 @@ finally {
     PlayerObject* makeGhost(PlayLayer* gameLayer) {
         if (!state.ghostRenderLayer) {
             state.ghostRenderLayer = CCLayer::create();
+            if (!state.ghostRenderLayer) {
+                return nullptr;
+            }
             state.ghostRenderLayer->retain();
         }
         auto* ghostPlayer = PlayerObject::create(1, 1, gameLayer, state.ghostRenderLayer, true);
+        if (!ghostPlayer) {
+            return nullptr;
+        }
         ghostPlayer->retain();
         ghostPlayer->setPosition(CCPoint(0.f, 105.f));
         ghostPlayer->setVisible(false);
@@ -6912,11 +6919,17 @@ finally {
         ghostPlayer->updateRotation(deltaTime);
     }
 
+    void clearCollisionLog(CCDictionary* log) {
+        if (log) {
+            log->removeAllObjects();
+        }
+    }
+
     void checkGhost(PlayLayer* gameLayer, PlayerObject* ghostPlayer, float deltaTime) {
-        ghostPlayer->m_collisionLogTop->removeAllObjects();
-        ghostPlayer->m_collisionLogBottom->removeAllObjects();
-        ghostPlayer->m_collisionLogLeft->removeAllObjects();
-        ghostPlayer->m_collisionLogRight->removeAllObjects();
+        clearCollisionLog(ghostPlayer->m_collisionLogTop);
+        clearCollisionLog(ghostPlayer->m_collisionLogBottom);
+        clearCollisionLog(ghostPlayer->m_collisionLogLeft);
+        clearCollisionLog(ghostPlayer->m_collisionLogRight);
         gameLayer->checkCollisions(ghostPlayer, deltaTime, false);
     }
 
@@ -6944,7 +6957,7 @@ finally {
     int simulate(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
         int stopAtTick, SimEnd* simulationEnd) {
         *simulationEnd = SimEnd::Ok;
-        if (!state.ghostPlayer1) {
+        if (!state.ghostPlayer1 || !player1) {
             return horizonTicks;
         }
         state.isSimulating = true;
@@ -7980,6 +7993,15 @@ finally {
     }
 }
 
+#define AFTERFLOW_PHASE(name)                       \
+    do {                                            \
+        static bool phaseShown = false;             \
+        if (!phaseShown) {                          \
+            phaseShown = true;                      \
+            log::info("afterflow: {}", name);       \
+        }                                           \
+    } while (false)
+
 $on_mod(Loaded) {
 
     // Breadcrumbs: if the game dies during startup on a platform we cannot
@@ -7999,12 +8021,14 @@ $on_mod(Loaded) {
     state.stageIndex = savedStageIndex;
     readSettings();
     applyStage();
+    AFTERFLOW_PHASE("settings applied");
     removeLegacyTerminalLogs();
     resetTerminalLog();
     if (!isMobileHost()) {
         startCycleWatcher();
     }
     setupKeybinds();
+    AFTERFLOW_PHASE("keybinds ready");
     static auto sceneListener = SceneEvent().listen([](CCScene* scene) {
         attachAfterflowOverlay(scene);
     });
@@ -8039,6 +8063,7 @@ $on_mod(Loaded) {
     (void)secondaryColorListener;
     (void)panelScaleListener;
     (void)fontScaleListener;
+    AFTERFLOW_PHASE("listeners ready");
     say("starting mode: {}", stageBanner());
     say("{} cycles anywhere: 2/2 -> 4/4 -> 8/8 -> 16/8 -> 24/12 -> 32/16 -> 40/20 -> off", stageKey());
     if (isMobileHost()) {
@@ -8085,10 +8110,18 @@ class $modify(BufPlayLayer, PlayLayer) {
         dropGhosts();
         readSettings();
         applyStage();
-        state.ghostPlayer1 = makeGhost(this);
-        state.ghostPlayer2 = makeGhost(this);
-        state.ghostLayerBaseIndex = state.ghostRenderLayer->getChildrenCount();
-        say("buffer ready | {} | {} cycles", stageText(), stageKey());
+        auto* ghost1 = makeGhost(this);
+        auto* ghost2 = makeGhost(this);
+        if (!ghost1 || !ghost2 || !state.ghostRenderLayer) {
+            dropGhosts();
+            log::warn("afterflow: could not create buffer players, buffering disabled for this level");
+        }
+        else {
+            state.ghostPlayer1 = ghost1;
+            state.ghostPlayer2 = ghost2;
+            state.ghostLayerBaseIndex = state.ghostRenderLayer->getChildrenCount();
+            say("buffer ready | {} | {} cycles", stageText(), stageKey());
+        }
         checkForUpdates(false);
         state.hasRealInput = false;
         state.hasAppliedInput = false;
@@ -8464,6 +8497,7 @@ class $modify(BufMenuLayer, MenuLayer) {
         if (!MenuLayer::init()) {
             return false;
         }
+        AFTERFLOW_PHASE("menu init");
 
         this->runAction(CCSequence::create(
             CCDelayTime::create(0.2f),
@@ -8480,6 +8514,7 @@ class $modify(BufMenuLayer, MenuLayer) {
             nullptr
         ));
         scheduleAfterflowOverlay(this);
+        AFTERFLOW_PHASE("menu scheduled");
         return true;
     }
 };
@@ -8620,6 +8655,7 @@ class $modify(BufPlayerObject, PlayerObject) {
         if (!ghostEffect()) PlayerObject::playBumpEffect(gameObjectType, gameObject);
     }
 
+#ifndef GEODE_IS_IOS
     void playSpawnEffect() {
         if (!ghostEffect()) PlayerObject::playSpawnEffect();
     }
@@ -8651,6 +8687,7 @@ class $modify(BufPlayerObject, PlayerObject) {
     void runNormalRotation(bool isNotNormalMode, float speedValue) {
         if (!ghostEffect()) PlayerObject::runNormalRotation(isNotNormalMode, speedValue);
     }
+#endif
 
     void toggleGhostEffect(GhostType ghostType) {
         if (!ghostEffect()) PlayerObject::toggleGhostEffect(ghostType);
