@@ -3658,7 +3658,6 @@ finally {
         m_deck->addChild(m_shell, 1);
         drawCurvedRect(m_shell, CCRect(-12.f, -22.f, DECK_WIDTH + 24.f, DECK_HEIGHT + 22.f), DECK_RADIUS + 6.f, color4(0, 0, 0, 72), none, 0.f);
         drawCurvedRect(m_shell, CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT), DECK_RADIUS, color4(shellTint, 252), panelTint(26), 1.f);
-        // resize grip, bottom right corner
         for (int k = 0; k < 3; ++k) {
             float o = 8.f + static_cast<float>(k) * 5.f;
             m_shell->drawSegment(CCPoint(DECK_WIDTH - o, 6.f), CCPoint(DECK_WIDTH - 6.f, o), 1.1f, color4(255, 255, 255, 80));
@@ -3994,8 +3993,6 @@ finally {
         float comfortableScale = std::min(fitScale, 0.94f);
         m_fitScale = std::max(fitScale, 0.2f);
         m_baseScale = comfortableScale * getUIPanelScale();
-        // the grip stores its size as a multiplier of the base scale so it keeps
-        // meaning after the safe area (and with it the fit cap) changes
         double userMul = std::clamp(Mod::get()->getSavedValue<double>("panel-user-mul", 1.0), 0.1, 8.0);
         m_deckScale = std::min(std::max(m_baseScale * static_cast<float>(userMul), 0.2f), fitScale);
         m_deck->setScale(m_deckScale);
@@ -4023,8 +4020,7 @@ finally {
         float maxX = m_safeArea.getMaxX() - halfW;
         float minY = m_safeArea.getMinY() + halfH;
         float maxY = m_safeArea.getMaxY() - halfH;
-        // a deck wider than the safe area inverts the range, and std::clamp with
-        // lo > hi is undefined, so pin that axis to the centre instead
+
         if (maxX < minX) { minX = maxX = m_safeArea.getMidX(); }
         if (maxY < minY) { minY = maxY = m_safeArea.getMidY(); }
         return CCPoint(std::clamp(position.x, minX, maxX), std::clamp(position.y, minY, maxY));
@@ -4068,7 +4064,6 @@ finally {
             saveDeckPlacement();
         }
         else if (wasResize) {
-            // double tap on the grip restores the default size and spot
             double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
             if (now - m_lastGripTap < 0.45) {
                 m_lastGripTap = -10.0;
@@ -5147,7 +5142,6 @@ finally {
                 }
                 else {
                     m_resizingDeck = true;
-                    // the opposite (top left) corner stays put while the grip moves
                     m_resizeTL = CCPoint(
                         deckPos.x - DECK_WIDTH * 0.5f * m_deckScale,
                         deckPos.y + DECK_HEIGHT * 0.5f * m_deckScale
@@ -5218,7 +5212,6 @@ finally {
                 ));
             }
             else if (m_deckMoved) {
-                // bottom right corner follows the finger, top left stays put
                 float scaleX = (local.x - m_resizeTL.x) / DECK_WIDTH;
                 float scaleY = (m_resizeTL.y - local.y) / DECK_HEIGHT;
                 float newScale = std::clamp((scaleX + scaleY) * 0.5f, 0.2f, m_fitScale);
@@ -6063,7 +6056,6 @@ finally {
                 }
             }
         }
-        // the empty part of the top bar drags the whole panel
         if (point.y >= DECK_HEIGHT - 54.f) {
             return HitTarget::DragPanel;
         }
@@ -6566,7 +6558,6 @@ finally {
                 return;
             }
             if (typeinfo_cast<CCTransitionScene*>(runningScene)) {
-                // roughly two seconds of frames at 60fps before giving up
                 if (attempts < 120) {
                     queueOverlayBuild(attempts + 1);
                 }
@@ -6580,14 +6571,6 @@ finally {
         if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
             return;
         }
-        // SceneEvent fires from CCDirector::willSwitchToScene, so building the
-        // deck here allocates fonts and sprites (GL textures) in the middle of a
-        // scene transition - the point where mobile crashes. Build it on the
-        // next tick against whatever scene is running by then instead.
-        // While the transition is still running CCScene::get() is the
-        // CCTransitionScene itself, and parenting the overlay to it puts our whole
-        // deck inside the subtree its onExit walks. Wait until the real scene is
-        // the running one.
         queueOverlayBuild(0);
     }
 
@@ -8004,8 +7987,6 @@ finally {
 
 $on_mod(Loaded) {
 
-    // Breadcrumbs: if the game dies during startup on a platform we cannot
-    // debug locally, the last line of the geode log points at the stage.
     log::info("afterflow: load start ({})", hostOSName());
     log::info("afterflow: version {}", Mod::get()->getVersion().toVString());
 
@@ -8142,10 +8123,6 @@ class $modify(BufPlayLayer, PlayLayer) {
     }
 
     void onExit() {
-        // onQuit is not the only teardown path: onExit always runs when the play
-        // scene leaves the graph, including exits that never call onQuit. The
-        // ghosts retain a raw pointer to this PlayLayer as their game layer, so
-        // drop them before onExit walks the subtree and the PlayLayer dies.
         resetPending();
         dropGhosts();
         PlayLayer::onExit();
@@ -8242,10 +8219,6 @@ namespace {
         face->setContentSize(CCSize(size, size));
         face->setAnchorPoint(CCPoint(0.5f, 0.5f));
 
-        // The halo is the logo itself, scaled up ring by ring, accent tinted and
-        // added instead of alpha blended. Every copy carries the icon
-        // silhouette, so the bloom follows the rounded square and the arrow
-        // instead of drawing a circle the icon sits inside of.
         for (int ring = 5; ring >= 1; --ring) {
             auto* copy = makeLogoMark(size);
             if (!copy) {
@@ -8349,8 +8322,6 @@ public:
             savePosition();
             return;
         }
-        // The panel tears down the pause layer from inside the touch callback;
-        // queue it so the dispatcher is done with this delegate first.
         Loader::get()->queueInMainThread([] {
             toggleAfterflowPanel();
         });
@@ -8502,9 +8473,6 @@ class $modify(BufMenuLayer, MenuLayer) {
         this->runAction(CCSequence::create(
             CCDelayTime::create(0.2f),
             CallFuncExt::create([] {
-                // Version check moved off mod load: on iOS the loader is still
-                // bringing up its runtime when mods load, and starting a web
-                // request there is the first thing that can run too early.
                 log::info("afterflow: menu ready");
                 checkForUpdates(true);
                 if (!showUpdatePopup()) {
