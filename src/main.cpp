@@ -6537,6 +6537,9 @@ finally {
         if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
             return;
         }
+        if (typeinfo_cast<CCTransitionScene*>(scene)) {
+            return;
+        }
         static bool announcedBuild = false;
         if (!announcedBuild) {
             announcedBuild = true;
@@ -6555,6 +6558,23 @@ finally {
         }
     }
 
+    void queueOverlayBuild(int attempts) {
+        Loader::get()->queueInMainThread([attempts] {
+            auto* runningScene = CCScene::get();
+            if (!runningScene) {
+                return;
+            }
+            if (typeinfo_cast<CCTransitionScene*>(runningScene)) {
+                // roughly two seconds of frames at 60fps before giving up
+                if (attempts < 120) {
+                    queueOverlayBuild(attempts + 1);
+                }
+                return;
+            }
+            buildAfterflowOverlay(runningScene);
+        });
+    }
+
     void attachAfterflowOverlay(CCScene* scene) {
         if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
             return;
@@ -6563,9 +6583,11 @@ finally {
         // deck here allocates fonts and sprites (GL textures) in the middle of a
         // scene transition - the point where mobile crashes. Build it on the
         // next tick against whatever scene is running by then instead.
-        Loader::get()->queueInMainThread([] {
-            buildAfterflowOverlay(CCScene::get());
-        });
+        // While the transition is still running CCScene::get() is the
+        // CCTransitionScene itself, and parenting the overlay to it puts our whole
+        // deck inside the subtree its onExit walks. Wait until the real scene is
+        // the running one.
+        queueOverlayBuild(0);
     }
 
     void ensureAfterflowOverlay() {
