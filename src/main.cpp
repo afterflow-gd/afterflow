@@ -8108,6 +8108,16 @@ class $modify(BufPlayLayer, PlayLayer) {
         PlayLayer::onQuit();
     }
 
+    void onExit() {
+        // onQuit is not the only teardown path: onExit always runs when the play
+        // scene leaves the graph, including exits that never call onQuit. The
+        // ghosts retain a raw pointer to this PlayLayer as their game layer, so
+        // drop them before onExit walks the subtree and the PlayLayer dies.
+        resetPending();
+        dropGhosts();
+        PlayLayer::onExit();
+    }
+
     void resetLevel() {
         resetPending();
         forgetPress();
