@@ -3348,6 +3348,7 @@ finally {
         void removePauseLayers();
         void updateHints();
         void tickRefresh(float dt);
+        void popupTick(float dt);
 
         CCLayerColor* m_scrim = nullptr;
         CCNodeRGBA* m_deck = nullptr;
@@ -3485,6 +3486,7 @@ finally {
         CCPoint m_dragDeckStart;
         CCPoint m_resizeTL;
         bool m_isOpen = false;
+        bool m_popupHidden = false;
         bool m_didPauseForPanel = false;
         bool m_isDraggingLauncher = false;
         bool m_launcherMoved = false;
@@ -4930,6 +4932,27 @@ finally {
         }
     }
 
+    void AfterflowOverlay::popupTick(float) {
+        auto* scene = CCScene::get();
+        bool popupOpen = false;
+        if (scene) {
+            auto* children = scene->getChildren();
+            for (unsigned int index = 0; children && index < children->count(); ++index) {
+                auto* node = typeinfo_cast<CCNode*>(children->objectAtIndex(index));
+                if (node && node != this && node->isVisible() && typeinfo_cast<FLAlertLayer*>(node)) {
+                    popupOpen = true;
+                    break;
+                }
+            }
+        }
+        if (popupOpen == m_popupHidden) {
+            return;
+        }
+        m_popupHidden = popupOpen;
+        setVisible(!popupOpen);
+        setTouchEnabled(!popupOpen && isMobileHost());
+    }
+
     void AfterflowOverlay::openPanel() {
         if (m_isOpen) {
             return;
@@ -5037,6 +5060,8 @@ finally {
         CCLayer::onEnter();
         layout();
         refresh();
+        unschedule(schedule_selector(AfterflowOverlay::popupTick));
+        schedule(schedule_selector(AfterflowOverlay::popupTick), 0.15f);
         if (m_deck && !m_isOpen) {
             m_deck->setVisible(false);
         }
@@ -5056,6 +5081,7 @@ finally {
         m_pressedNode = nullptr;
         unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
         unschedule(schedule_selector(AfterflowOverlay::animTick));
+        unschedule(schedule_selector(AfterflowOverlay::popupTick));
         CCLayer::onExit();
     }
 
