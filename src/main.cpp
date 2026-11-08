@@ -20,7 +20,6 @@
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
-#include <Geode/modify/CCDictionary.hpp>
 #include <Geode/modify/RingObject.hpp>
 #include <algorithm>
 #include <cctype>
@@ -37,7 +36,6 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -150,10 +148,9 @@ namespace {
     constexpr int CUSTOM_STAGE_LIMIT = 4;
     constexpr int CUSTOM_TICKS_MIN = 1;
     constexpr int CUSTOM_TICKS_MAX = 240;
-    constexpr int MODE_TICKS_MAX = 240;
-    constexpr bool WAVE_DIRECT_INPUT = false;
+    constexpr int CUSTOM_TICKS_SAFE = 120;
     constexpr int MODE_TICK_COUNT = 8;
-    constexpr char const* MODE_TICK_NAMES[MODE_TICK_COUNT] = {
+    char const* const MODE_TICK_NAMES[MODE_TICK_COUNT] = {
         "cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing"
     };
 
@@ -167,6 +164,15 @@ namespace {
 
     int clampCustomTicks(int value) {
         return std::clamp(value, CUSTOM_TICKS_MIN, CUSTOM_TICKS_MAX);
+    }
+
+    void showHighTicksPopup() {
+        std::string message = fmt::format(
+            "delays over {0} ticks may lag or work worse than {0}.\n"
+            "your game might stutter or the stage might act weird.",
+            CUSTOM_TICKS_SAFE
+        );
+        FLAlertLayer::create("warning", message.c_str(), "ok i understand")->show();
     }
 
     void loadCustomStages() {
@@ -233,7 +239,7 @@ namespace {
     bool g_modeTicksLoaded = false;
 
     int clampModeTicks(int value) {
-        return std::clamp(value, 0, MODE_TICKS_MAX);
+        return std::clamp(value, 0, CUSTOM_TICKS_MAX);
     }
 
     void loadModeTicks() {
@@ -325,7 +331,6 @@ namespace {
         bool isActivatedByEffect;
         bool byPlayer1;
         bool byPlayer2;
-        bool animationTriggered;
     };
 
     struct ProbeOrb {
@@ -566,7 +571,6 @@ namespace {
         }
         return state.ticksAllModes;
     }
-
     std::string wineUser() {
         if (auto* userName = std::getenv("USER"); userName && *userName) {
             return userName;
@@ -1615,6 +1619,7 @@ finally {
                 return false;
             }
             this->setTouchEnabled(true);
+            this->setKeypadEnabled(true);
             return true;
         }
 
@@ -1625,6 +1630,7 @@ finally {
         void ccTouchMoved(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
         void ccTouchEnded(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
         void ccTouchCancelled(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
+        void keyBackClicked() override {}
     };
 
     struct UpdateOverlayState {
@@ -1678,7 +1684,7 @@ finally {
 
     void showUpdateOverlay() {
         auto* scene = cocos2d::CCScene::get();
-        if (!scene || typeinfo_cast<CCTransitionScene*>(scene) || updateOverlay.layer) {
+        if (!scene || updateOverlay.layer) {
             return;
         }
         auto* layer = UpdateOverlayLayer::create();
@@ -2302,11 +2308,11 @@ finally {
 #endif
     }
 
-    bool isSimulatedGhost(PlayerObject* playerObject) {
+    bool isGhost(PlayerObject* playerObject) {
         return playerObject && (playerObject == state.ghostPlayer1 || playerObject == state.ghostPlayer2);
     }
 
-    void clearQueuedPresses() {
+    void resetPending() {
         state.queuedInputs.clear();
         state.inputShiftTicks = 0;
         state.releaseShiftTicks = 0;
@@ -2500,10 +2506,10 @@ finally {
     constexpr float DISMISS_WIDTH = 30.f;
     constexpr float DISMISS_HEIGHT = 30.f;
 
-    constexpr int THEME_COUNT = 16;
+    constexpr int THEME_COUNT = 15;
     constexpr int THEMES_PER_ROW = 8;
     constexpr int THEME_ROW_COUNT = (THEME_COUNT + THEMES_PER_ROW - 1) / THEMES_PER_ROW;
-    constexpr float SWATCH_WIDTH = 71.f;
+    constexpr float SWATCH_WIDTH = 76.f;
     constexpr float SWATCH_HEIGHT = 38.f;
     constexpr float SWATCH_GAP = 6.f;
     constexpr float SWATCH_ROW_GAP = 8.f;
@@ -2592,41 +2598,6 @@ finally {
         return true;
     }
 
-    bool jsonIntList(std::string const& json, char const* key, std::vector<int>& out) {
-        std::string needle = std::string("\"") + key + "\"";
-        size_t pos = json.find(needle);
-        if (pos == std::string::npos) {
-            return false;
-        }
-        pos = json.find('[', pos + needle.size());
-        if (pos == std::string::npos) {
-            return false;
-        }
-        size_t end = json.find(']', pos);
-        if (end == std::string::npos) {
-            return false;
-        }
-        out.clear();
-        int value = 0;
-        bool found = false;
-        for (size_t index = pos; index < end; ++index) {
-            char character = json[index];
-            if (character >= '0' && character <= '9') {
-                value = value * 10 + (character - '0');
-                found = true;
-            }
-            else if (found) {
-                out.push_back(value);
-                value = 0;
-                found = false;
-            }
-        }
-        if (found) {
-            out.push_back(value);
-        }
-        return !out.empty();
-    }
-
     struct UITheme {
         char const* name;
         int primary;
@@ -2639,19 +2610,18 @@ finally {
         { "violet",  0x7C4DFF, 0xB79CFF, 0x16161A, 0xE8E9EE },
         { "ocean",   0x3BA3FF, 0x8FD0FF, 0x121820, 0xE6EDF5 },
         { "mint",    0x34D399, 0x8EE8C4, 0x101A17, 0xE4F2EC },
+        { "amber",   0xFFB454, 0xFFD79B, 0x1B1712, 0xF4EDE3 },
         { "rose",    0xFF6B8A, 0xFFB3C3, 0x1B1418, 0xF5E8EC },
         { "mono",    0xC9CDD6, 0xFFFFFF, 0x15161A, 0xEDEEF2 },
         { "ice",     0x67D5FF, 0xBFEAFF, 0x101820, 0xE6F1F7 },
+        { "sunset",  0xFF8A5B, 0xFFC29E, 0x1C1512, 0xF7EAE2 },
         { "grape",   0xA855F7, 0xD5B4FF, 0x17131F, 0xEFE7F7 },
         { "lime",    0xA3E635, 0xD9F99D, 0x141A10, 0xEAF3DF },
         { "crimson", 0xF43F5E, 0xFF9EB0, 0x1B1115, 0xF5E4E8 },
+        { "slate",   0x94A3B8, 0xE2E8F0, 0x151A21, 0xE8EDF3 },
         { "dark",    0xF2F3F7, 0x14161B, 0x0A0B0E, 0xF2F3F7 },
         { "white",   0x3B82F6, 0xFFFFFF, 0xF4F2ED, 0x1C1D22 },
         { "graphene", 0x8B94A3, 0xC9D1DC, 0x111318, 0xE6EAF0 },
-        { "aurora",  0x2DD4BF, 0x99F6E4, 0x0E1A19, 0xE2F5F1 },
-        { "nebula",  0x6366F1, 0xC7D2FE, 0x121331, 0xE9EAFB },
-        { "cobalt",  0x2563EB, 0x93C5FD, 0x0E1420, 0xE4EBF7 },
-        { "jade",    0x10B981, 0x6EE7B7, 0x0D1815, 0xE3F3EC },
     };
 
     ccColor3B accentColor() {
@@ -2874,10 +2844,6 @@ finally {
         return CCRect(CONTENT_RIGHT - 22.f - 104.f, STAGE_META_Y - 15.f, 104.f, 30.f);
     }
 
-    CCRect stageKeyRect() {
-        return CCRect(CONTENT_RIGHT - 22.f - 210.f, STAGE_HINT_Y - 17.f, 210.f, 34.f);
-    }
-
     CCRect customRemoveRect() {
         return CCRect(CONTENT_RIGHT - 22.f - 104.f - 8.f - 88.f, STAGE_META_Y - 15.f, 88.f, 30.f);
     }
@@ -2939,7 +2905,7 @@ finally {
     }
 
     char const* tabName(int index) {
-        static char const* names[TAB_COUNT] = { "log", "stage", "modes", "settings" };
+        static char const* names[TAB_COUNT] = { "log", "stage", "settings", "modes" };
         if (index < 0 || index >= TAB_COUNT) {
             return "";
         }
@@ -2984,10 +2950,6 @@ finally {
 
     CCRect modeTicksAutoRect() {
         return CCRect(CONTENT_RIGHT - 96.f, SETTINGS_HEADER_Y - 12.f, 96.f, 24.f);
-    }
-
-    CCRect modeApplyRect() {
-        return CCRect(CONTENT_RIGHT - 96.f - 8.f - 88.f, SETTINGS_HEADER_Y - 12.f, 88.f, 24.f);
     }
 
     CCRect logExpandRect() {
@@ -3099,25 +3061,6 @@ finally {
         return stageLabelAt(index);
     }
 
-    std::string stageKeySetting(int index) {
-        if (index >= 0 && index < STAGE_TABLE_SIZE) {
-            return fmt::format("stage-key-{}", stageName(index));
-        }
-        int custom = index - STAGE_TABLE_SIZE;
-        if (custom >= 0 && custom < CUSTOM_STAGE_LIMIT) {
-            return fmt::format("stage-key-c{}", custom + 1);
-        }
-        return {};
-    }
-
-    std::string stageKeyText(int index) {
-        auto setting = stageKeySetting(index);
-        if (setting.empty()) {
-            return "unbound";
-        }
-        return lowercaseText(keybindList(setting));
-    }
-
     void fitLabelToWidth(CCLabelBMFont* label, float maxWidth) {
         if (!label || maxWidth <= 0.f) {
             return;
@@ -3197,58 +3140,32 @@ finally {
                 character = ' ';
             }
         }
+        constexpr size_t MAX_LENGTH = 30;
+        if (text.size() > MAX_LENGTH) {
+            text.resize(MAX_LENGTH - 3);
+            text += "...";
+        }
         return text;
     }
 
-    std::string wrapLogLine(CCLabelBMFont* label, std::string text, float maxWidth, float maxHeight) {
+    std::string fitLogLine(CCLabelBMFont* label, std::string text, float maxWidth) {
         if (!label) {
             return text;
         }
-        float const baseScale = label->getScale();
-        constexpr int MAX_LINES = 2;
-        std::vector<std::string> lines;
-        std::string current;
-        size_t index = 0;
-        while (index < text.size()) {
-            size_t space = text.find(' ', index);
-            if (space == std::string::npos) {
-                space = text.size();
-            }
-            std::string word = text.substr(index, space - index);
-            std::string candidate = current.empty() ? word : current + " " + word;
+        label->setString(text.c_str());
+        if (label->getContentSize().width * label->getScale() <= maxWidth) {
+            return text;
+        }
+        while (text.size() > 3) {
+            text.pop_back();
+            std::string candidate = text + "...";
             label->setString(candidate.c_str());
-            bool const overflows = !current.empty()
-                && label->getContentSize().width * baseScale > maxWidth
-                && static_cast<int>(lines.size()) < MAX_LINES - 1;
-            if (overflows) {
-                lines.push_back(current);
-                current = word;
+            if (label->getContentSize().width * label->getScale() <= maxWidth) {
+                return candidate;
             }
-            else {
-                current = candidate;
-            }
-            index = space >= text.size() ? text.size() : space + 1;
         }
-        lines.push_back(current);
-        std::string wrapped;
-        for (size_t line = 0; line < lines.size(); ++line) {
-            if (line > 0) {
-                wrapped += '\n';
-            }
-            wrapped += lines[line];
-        }
-        label->setString(wrapped.c_str());
-        float const width = label->getContentSize().width;
-        float const height = label->getContentSize().height;
-        float fitted = baseScale;
-        if (width > 0.f && width * fitted > maxWidth) {
-            fitted = fitted * maxWidth / width;
-        }
-        if (height > 0.f && height * fitted > maxHeight) {
-            fitted = fitted * maxHeight / height;
-        }
-        label->setScale(fitted);
-        return wrapped;
+        label->setString("");
+        return {};
     }
 
     void renderLogRows(
@@ -3257,7 +3174,6 @@ finally {
         std::vector<std::string> const& logs,
         int scroll,
         float maxWidth,
-        float maxHeight,
         float baseScale,
         bool markLatest
     ) {
@@ -3275,11 +3191,11 @@ finally {
             std::string text = singleLineLog(logs[static_cast<size_t>(entry)]);
             bool const isLatest = markLatest && scroll <= 0 && row == rowCount - 1;
             text = (isLatest ? "> " : "  ") + text;
+            fitLogLine(label, text, maxWidth);
             bool lowPriority = text.find("host os") != std::string::npos
                 || text.find("loader") != std::string::npos
                 || text.find("version check") != std::string::npos;
             label->setScale(isLatest ? baseScale : (lowPriority ? baseScale * 0.88f : baseScale * 0.97f));
-            wrapLogLine(label, text, maxWidth, maxHeight);
             label->setColor(isLatest ? (lightSurface() ? accentColor() : secondaryColor()) : logTextColor());
             label->setOpacity(isLatest ? 255 : (lowPriority ? 150 : 232));
         }
@@ -3330,14 +3246,13 @@ finally {
     constexpr int TF_TAB0 = 3;
     constexpr int TF_TAB1 = 4;
     constexpr int TF_TAB2 = 5;
-    constexpr int TF_TAB3 = 6;
-    constexpr int TF_LOGPANE = 7;
-    constexpr int TF_COPY = 8;
-    constexpr int TF_STAGETRACK = 9;
-    constexpr int TF_CUSTOM = 10;
-    constexpr int TF_SLIDER = 11;
-    constexpr int TF_SWATCHES = 12;
-    constexpr int TF_CONFIG = 13;
+    constexpr int TF_LOGPANE = 6;
+    constexpr int TF_COPY = 7;
+    constexpr int TF_STAGETRACK = 8;
+    constexpr int TF_CUSTOM = 9;
+    constexpr int TF_SLIDER = 10;
+    constexpr int TF_SWATCHES = 11;
+    constexpr int TF_CONFIG = 12;
 
     struct TutorialStep {
         std::string title;
@@ -3388,19 +3303,14 @@ finally {
             "then drag the slider, tap the number and type, or use",
             "-5 / -1 / +1 / +5 to set the delay for all and wave.",
             "remove deletes the selected custom stage.",
+            "going over 120 ticks may lag or work worse.",
         }, TF_CUSTOM, false, TF_CUSTOM, TF_SLIDER });
-        steps.push_back({ "modes tab", -1, {
-            "every game mode can have its own delay, in ticks.",
-            "your own icon for each mode is shown on the left.",
-            "tap - / + or -5 / +5 to tune one, tap the tile to put it back on auto.",
-            "auto means it follows the stage you picked.",
-        }, TF_TAB2, true, TF_TAB2, TF_NONE });
         steps.push_back({ "settings tab", -1, {
             "pick a theme to change the panel colors.",
             "glow turns the soft glow behind the panel on or off.",
             "credits (top right) shows who helped make this.",
             "export copies your tuning as json, import loads it back.",
-        }, TF_TAB3, true, TF_SWATCHES, TF_CONFIG });
+        }, TF_TAB2, true, TF_SWATCHES, TF_CONFIG });
         steps.push_back({ "you're all set", -1, {
             "that's everything.",
             "tap the afterflow logo any time to see this tour again.",
@@ -3431,8 +3341,7 @@ finally {
             case TF_DISMISS: return CCRect(DISMISS_X, DISMISS_Y, DISMISS_WIDTH, DISMISS_HEIGHT);
             case TF_TAB0:
             case TF_TAB1:
-            case TF_TAB2:
-            case TF_TAB3: return tabSlotRect(kind - TF_TAB0);
+            case TF_TAB2: return tabSlotRect(kind - TF_TAB0);
             case TF_LOGPANE: return CCRect(LOG_X, 250.f, LOG_WIDTH, CARD_TOP - 250.f);
             case TF_COPY: return CCRect(COPY_X, COPY_Y, COPY_WIDTH, COPY_HEIGHT);
             case TF_STAGETRACK: return CCRect(STAGE_TRACK_X, STAGE_TRACK_Y, STAGE_TRACK_WIDTH, STAGE_TRACK_HEIGHT);
@@ -3492,40 +3401,12 @@ finally {
         return best;
     }
 
-    class AfterflowOverlay : public CCLayer, public FLAlertLayerProtocol {
+    class AfterflowOverlay : public CCLayer {
     public:
         static AfterflowOverlay* create();
         bool init() override;
         void onEnter() override;
         void onExit() override;
-
-        void keyDown(cocos2d::enumKeyCodes key, double) override {
-            if (!m_listeningStageKey) {
-                return;
-            }
-            if (key == cocos2d::KEY_Shift || key == cocos2d::KEY_LeftShift || key == cocos2d::KEY_RightShift
-                || key == cocos2d::KEY_Control || key == cocos2d::KEY_LeftControl || key == cocos2d::KEY_RightControl
-                || key == cocos2d::KEY_Alt || key == cocos2d::KEY_LeftMenu || key == cocos2d::KEY_RightMenu) {
-                return;
-            }
-            m_listeningStageKey = false;
-            cocos2d::CCKeyboardDispatcher::get()->removeDelegate(this);
-            if (key == cocos2d::KEY_None || key == cocos2d::KEY_Escape) {
-                refresh();
-                return;
-            }
-            auto setting = stageKeySetting(state.stageIndex);
-            if (setting.empty()) {
-                refresh();
-                return;
-            }
-            std::vector<Keybind> binds;
-            binds.push_back(Keybind(key, KeyboardModifier::None));
-            Mod::get()->setSettingValue<std::vector<Keybind>>(setting, binds);
-            (void)Mod::get()->saveData();
-            say("{} key set to {}", stageTitleAt(state.stageIndex), stageKeyText(state.stageIndex));
-            refresh();
-        }
         void refresh();
         void rebuildDeck();
         void openPanel();
@@ -3555,27 +3436,22 @@ finally {
             Tab,
             Chip,
             Theme,
-            DragPanel,
-            Resize,
             SettingsRow,
             SettingsStep,
             ImportConfig,
             ExportConfig,
+            ModeTick,
+            ModeTickReset,
+            ModeTicksAuto,
             ReplayTutorial,
             Credits,
             ModeIcon,
             ModeIconAdd,
             StageAdd,
             CustomRemove,
-            StageKey,
             TickAdjust,
             TickField,
             TickSlider,
-            ModeTick,
-            ModeTickReset,
-            ModeIconIgnore,
-            ModeTicksAuto,
-            ModesApply,
             TutorialSkip,
             TutorialNext,
             Logo,
@@ -3591,15 +3467,9 @@ finally {
         void closeLogLayer();
         void exportConfig();
         void importConfig();
-        void FLAlert_Clicked(FLAlertLayer* layer, bool btn2) override;
         void updateModeIcons();
         void setConfigStatus(std::string const& text, bool ok);
         void layout();
-        CCPoint clampDeckPosition(CCPoint const& position, float scale) const;
-        CCPoint savedDeckPosition() const;
-        void saveDeckPlacement();
-        void resetDeckPlacement();
-        void finishDeckGesture();
         CCPoint defaultLauncherPosition() const;
         CCPoint clampLauncherPosition(CCPoint const& position) const;
         void saveLauncherPosition();
@@ -3629,7 +3499,6 @@ finally {
         void removePauseLayers();
         void updateHints();
         void tickRefresh(float dt);
-        void popupTick(float dt);
 
         CCLayerColor* m_scrim = nullptr;
         CCNodeRGBA* m_deck = nullptr;
@@ -3648,8 +3517,6 @@ finally {
         CCLabelBMFont* m_activityCountLabel = nullptr;
         CCLabelBMFont* m_activityLines[LOG_LINE_COUNT] = {};
         CCLabelBMFont* m_stageNameLabels[STAGE_MAX_STAGES] = {};
-        CCLabelBMFont* m_stageKeyLabel = nullptr;
-        bool m_listeningStageKey = false;
         CCLabelBMFont* m_stageHintKeyLabel = nullptr;
         CCLabelBMFont* m_stageHintLabel = nullptr;
         CCLabelBMFont* m_panelHintKeyLabel = nullptr;
@@ -3659,6 +3526,15 @@ finally {
         CCLabelBMFont* m_tabLabels[TAB_COUNT] = {};
         CCNode* m_logPane = nullptr;
         CCNode* m_stagePane = nullptr;
+        CCNode* m_modeTicksPane = nullptr;
+        CCDrawNode* m_modeTicksBar = nullptr;
+        CCLabelBMFont* m_modeTicksHeaderLabel = nullptr;
+        CCLabelBMFont* m_modeTicksHintLabel = nullptr;
+        CCLabelBMFont* m_modeTickNameLabels[MODE_TICK_COUNT] = {};
+        CCLabelBMFont* m_modeTickValueLabels[MODE_TICK_COUNT] = {};
+        CCLabelBMFont* m_modeTickBtnLabels[MODE_TICK_COUNT * 4] = {};
+        CCLabelBMFont* m_modeTicksAutoLabel = nullptr;
+        SimplePlayer* m_modeTickIcons[MODE_TICK_COUNT] = {};
         CCNode* m_modesPane = nullptr;
         CCNode* m_toolsPane = nullptr;
         CCLabelBMFont* m_modesWaveLabel = nullptr;
@@ -3705,6 +3581,7 @@ finally {
         int m_editingRow = -1;
         bool m_suppressTickInput = false;
         bool m_draggingSlider = false;
+        bool m_sliderStartedOver = false;
         int m_sliderRow = -1;
         CCLabelBMFont* m_customAddLabel = nullptr;
         CCLabelBMFont* m_customRemoveLabel = nullptr;
@@ -3718,15 +3595,6 @@ finally {
         CCDrawNode* m_glow = nullptr;
         CCNode* m_modeIconContainer = nullptr;
         std::vector<SimplePlayer*> m_modeIcons;
-        CCDrawNode* m_modeTicksBar = nullptr;
-        CCLabelBMFont* m_modeTicksHeaderLabel = nullptr;
-        CCLabelBMFont* m_modeTicksHintLabel = nullptr;
-        CCLabelBMFont* m_modeTickNameLabels[MODE_TICK_COUNT] = {};
-        CCLabelBMFont* m_modeTickValueLabels[MODE_TICK_COUNT] = {};
-        CCLabelBMFont* m_modeTickBtnLabels[MODE_TICK_COUNT * 4] = {};
-        CCLabelBMFont* m_modeTicksAutoLabel = nullptr;
-        CCLabelBMFont* m_modeApplyLabel = nullptr;
-        SimplePlayer* m_modeTickIcons[MODE_TICK_COUNT] = {};
         std::vector<int>& modeSlots();
         void saveModeSlots();
         std::vector<int> m_modeSlots;
@@ -3767,18 +3635,7 @@ finally {
         CCPoint m_launcherDragStart;
         CCPoint m_launcherDragOffset;
         float m_deckScale = 1.f;
-        float m_baseScale = 1.f;
-        float m_fitScale = 1.f;
-        double m_lastGripTap = -10.0;
-        bool m_draggingDeck = false;
-        bool m_resizingDeck = false;
-        bool m_deckMoved = false;
-        CCPoint m_dragTouchStart;
-        CCPoint m_dragDeckStart;
-        CCPoint m_resizeTL;
         bool m_isOpen = false;
-        bool m_popupHidden = false;
-        bool m_hiddenForAlert = false;
         bool m_didPauseForPanel = false;
         bool m_isDraggingLauncher = false;
         bool m_launcherMoved = false;
@@ -3862,6 +3719,17 @@ finally {
         m_tabBar = nullptr;
         m_logPane = nullptr;
         m_stagePane = nullptr;
+        m_modeTicksPane = nullptr;
+        m_modeTicksBar = nullptr;
+        m_modeTicksHeaderLabel = nullptr;
+        m_modeTicksHintLabel = nullptr;
+        m_modeTicksAutoLabel = nullptr;
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            m_modeTickNameLabels[index] = nullptr;
+            m_modeTickValueLabels[index] = nullptr;
+            m_modeTickIcons[index] = nullptr;
+        }
+        for (int index = 0; index < MODE_TICK_COUNT * 4; ++index) { m_modeTickBtnLabels[index] = nullptr; }
         m_modesPane = nullptr;
         m_toolsPane = nullptr;
         m_modesWaveLabel = nullptr;
@@ -3891,16 +3759,6 @@ finally {
         m_logViewBar = nullptr;
         for (int index = 0; index < LOG_VIEW_LINE_COUNT; ++index) { m_logViewLines[index] = nullptr; }
         m_modeIcons.clear();
-        m_modeTicksBar = nullptr;
-        m_modeTicksHeaderLabel = nullptr;
-        m_modeTicksHintLabel = nullptr;
-        m_modeTicksAutoLabel = nullptr;
-        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
-            m_modeTickNameLabels[index] = nullptr;
-            m_modeTickValueLabels[index] = nullptr;
-            m_modeTickIcons[index] = nullptr;
-        }
-        for (int index = 0; index < MODE_TICK_COUNT * 2; ++index) { m_modeTickBtnLabels[index] = nullptr; }
         for (int index = 0; index < LOG_LINE_COUNT; ++index) { m_activityLines[index] = nullptr; }
         for (int index = 0; index < STAGE_MAX_STAGES; ++index) { m_stageNameLabels[index] = nullptr; }
         for (int index = 0; index < 8; ++index) { m_tickBtnLabels[index] = nullptr; }
@@ -3962,10 +3820,6 @@ finally {
         m_deck->addChild(m_shell, 1);
         drawCurvedRect(m_shell, CCRect(-12.f, -22.f, DECK_WIDTH + 24.f, DECK_HEIGHT + 22.f), DECK_RADIUS + 6.f, color4(0, 0, 0, 72), none, 0.f);
         drawCurvedRect(m_shell, CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT), DECK_RADIUS, color4(shellTint, 252), panelTint(26), 1.f);
-        for (int k = 0; k < 3; ++k) {
-            float o = 8.f + static_cast<float>(k) * 5.f;
-            m_shell->drawSegment(CCPoint(DECK_WIDTH - o, 6.f), CCPoint(DECK_WIDTH - 6.f, o), 1.1f, color4(255, 255, 255, 80));
-        }
         drawCurvedRect(m_shell, CCRect(CONTENT_X, CARD_BOTTOM, CONTENT_WIDTH, CARD_HEIGHT), CARD_RADIUS, color4(surface, 255), panelTint(18), 1.f);
 
         m_tabBar = makeDrawNode();
@@ -4097,12 +3951,6 @@ finally {
             hint->setPosition(CCPoint(LOG_X + 22.f, STAGE_HINT_Y));
             m_deck->addChild(hint, 3);
             m_stageTimingLabels[2] = hint;
-        }
-        if (auto* keyLabel = makeLabel("key: unbound", false, 0.72f, accentColor())) {
-            auto keyRect = stageKeyRect();
-            keyLabel->setPosition(CCPoint(keyRect.getMidX(), keyRect.getMidY()));
-            m_deck->addChild(keyLabel, 3);
-            m_stageKeyLabel = keyLabel;
         }
 
         for (int row = 0; row < 2; ++row) {
@@ -4245,12 +4093,12 @@ finally {
         m_configStatusLabel->setPosition(CCPoint(configButtonRect(2).getMaxX() + 14.f, CONFIG_BUTTON_Y));
         m_deck->addChild(m_configStatusLabel, 3);
 
-        m_modesPane = CCNode::create();
-        m_modesPane->setPosition(CCPoint(0.f, 0.f));
-        m_deck->addChild(m_modesPane, 3);
+        m_modeTicksPane = CCNode::create();
+        m_modeTicksPane->setPosition(CCPoint(0.f, 0.f));
+        m_deck->addChild(m_modeTicksPane, 3);
 
         m_modeTicksBar = makeDrawNode();
-        m_modesPane->addChild(m_modeTicksBar, 1);
+        m_modeTicksPane->addChild(m_modeTicksBar, 1);
         for (int index = 0; index < MODE_TICK_COUNT; ++index) {
             drawCurvedRect(m_modeTicksBar, modeTickCellRect(index), 7.f, panelTint(8), panelTint(22), 1.f);
             for (int which = 0; which < 4; ++which) {
@@ -4265,94 +4113,88 @@ finally {
             }
         }
         drawCurvedRect(m_modeTicksBar, modeTicksAutoRect(), 7.f, panelTint(10), panelTint(28), 1.f);
-        drawCurvedRect(m_modeTicksBar, modeApplyRect(), 7.f, color4(accentColor(), 34), color4(accentColor(), 110), 1.f);
 
         if (auto* header = makeLabel("ticks per mode", true, 0.62f, logTextColor())) {
             header->setAnchorPoint(CCPoint(0.f, 0.5f));
             header->setPosition(CCPoint(LOG_X + 22.f, SETTINGS_HEADER_Y));
-            m_modesPane->addChild(header, 2);
+            m_modeTicksPane->addChild(header, 2);
             m_modeTicksHeaderLabel = header;
         }
         if (auto* hint = makeLabel("top row -5 / +5, bottom row - / +, tap the tile for auto", false, 0.58f, faintTextColor())) {
             fitLabelToWidth(hint, CONTENT_WIDTH - 44.f);
             hint->setAnchorPoint(CCPoint(0.f, 0.5f));
             hint->setPosition(CCPoint(LOG_X + 22.f, MODE_TICKS_HINT_Y));
-            m_modesPane->addChild(hint, 2);
+            m_modeTicksPane->addChild(hint, 2);
             m_modeTicksHintLabel = hint;
         }
 
-        auto* manager = GameManager::get();
-        int modeFrames[MODE_TICK_COUNT] = {};
-        IconType modeTypes[MODE_TICK_COUNT] = {
-            IconType::Cube, IconType::Ship, IconType::Ball, IconType::Ufo,
-            IconType::Wave, IconType::Robot, IconType::Spider, IconType::Swing,
-        };
-        ccColor3B modePrimary = color3(255, 255, 255);
-        ccColor3B modeSecondary = color3(255, 255, 255);
-        if (manager) {
-            modeFrames[0] = manager->getPlayerFrame();
-            modeFrames[1] = manager->getPlayerShip();
-            modeFrames[2] = manager->getPlayerBall();
-            modeFrames[3] = manager->getPlayerBird();
-            modeFrames[4] = manager->getPlayerDart();
-            modeFrames[5] = manager->getPlayerRobot();
-            modeFrames[6] = manager->getPlayerSpider();
-            modeFrames[7] = manager->getPlayerSwing();
-            modePrimary = manager->colorForIdx(manager->getPlayerColor());
-            modeSecondary = manager->colorForIdx(manager->getPlayerColor2());
-        }
-
-        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
-            auto cell = modeTickCellRect(index);
-            auto iconRect = modeTickIconRect(index);
+        {
+            auto* manager = GameManager::get();
+            int modeFrames[MODE_TICK_COUNT] = {};
+            IconType modeTypes[MODE_TICK_COUNT] = {
+                IconType::Cube, IconType::Ship, IconType::Ball, IconType::Ufo,
+                IconType::Wave, IconType::Robot, IconType::Spider, IconType::Swing,
+            };
+            ccColor3B modePrimary = color3(255, 255, 255);
+            ccColor3B modeSecondary = color3(255, 255, 255);
             if (manager) {
-                auto* icon = SimplePlayer::create(1);
-                if (icon) {
-                    icon->updatePlayerFrame(modeFrames[index], modeTypes[index]);
-                    icon->setColors(modePrimary, modeSecondary);
-                    icon->setScale(iconRect.size.width / 40.f);
-                    icon->setPosition(CCPoint(iconRect.getMidX(), iconRect.getMidY()));
-                    icon->setOpacity(150);
-                    m_modesPane->addChild(icon, 2);
-                    m_modeTickIcons[index] = icon;
+                modeFrames[0] = manager->getPlayerFrame();
+                modeFrames[1] = manager->getPlayerShip();
+                modeFrames[2] = manager->getPlayerBall();
+                modeFrames[3] = manager->getPlayerBird();
+                modeFrames[4] = manager->getPlayerDart();
+                modeFrames[5] = manager->getPlayerRobot();
+                modeFrames[6] = manager->getPlayerSpider();
+                modeFrames[7] = manager->getPlayerSwing();
+                modePrimary = manager->colorForIdx(manager->getPlayerColor());
+                modeSecondary = manager->colorForIdx(manager->getPlayerColor2());
+            }
+
+            for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+                auto cell = modeTickCellRect(index);
+                auto iconRect = modeTickIconRect(index);
+                if (manager) {
+                    auto* icon = SimplePlayer::create(1);
+                    if (icon) {
+                        icon->updatePlayerFrame(modeFrames[index], modeTypes[index]);
+                        icon->setColors(modePrimary, modeSecondary);
+                        icon->setScale(iconRect.size.width / 40.f);
+                        icon->setPosition(CCPoint(iconRect.getMidX(), iconRect.getMidY()));
+                        icon->setOpacity(150);
+                        m_modeTicksPane->addChild(icon, 2);
+                        m_modeTickIcons[index] = icon;
+                    }
+                }
+                if (auto* name = makeLabel(MODE_TICK_NAMES[index], true, 0.56f, softTextColor())) {
+                    fitLabelToWidth(name, MODE_TICK_TILE_W - 20.f);
+                    name->setAnchorPoint(CCPoint(0.5f, 0.5f));
+                    name->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 10.f));
+                    m_modeTicksPane->addChild(name, 2);
+                    m_modeTickNameLabels[index] = name;
+                }
+                if (auto* value = makeLabel("auto", false, 0.54f, faintTextColor())) {
+                    value->setAnchorPoint(CCPoint(0.5f, 0.5f));
+                    value->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 46.f));
+                    m_modeTicksPane->addChild(value, 2);
+                    m_modeTickValueLabels[index] = value;
+                }
+                static char const* stepText[4] = { "-5", "+5", "-", "+" };
+                for (int which = 0; which < 4; ++which) {
+                    auto stepRect = modeTickStepRect(index, which);
+                    if (auto* glyph = makeLabel(stepText[which], false, 0.56f, accentColor())) {
+                        fitLabelToWidth(glyph, stepRect.size.width - 6.f);
+                        glyph->setPosition(CCPoint(stepRect.getMidX(), stepRect.getMidY()));
+                        m_modeTicksPane->addChild(glyph, 2);
+                        m_modeTickBtnLabels[index * 4 + which] = glyph;
+                    }
                 }
             }
-            if (auto* name = makeLabel(MODE_TICK_NAMES[index], true, 0.56f, softTextColor())) {
-                fitLabelToWidth(name, MODE_TICK_TILE_W - 20.f);
-                name->setAnchorPoint(CCPoint(0.5f, 0.5f));
-                name->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 10.f));
-                m_modesPane->addChild(name, 2);
-                m_modeTickNameLabels[index] = name;
-            }
-            if (auto* value = makeLabel("auto", false, 0.54f, faintTextColor())) {
-                value->setAnchorPoint(CCPoint(0.5f, 0.5f));
-                value->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 43.f));
-                m_modesPane->addChild(value, 2);
-                m_modeTickValueLabels[index] = value;
-            }
-            static char const* stepText[4] = { "-5", "+5", "-", "+" };
-            for (int which = 0; which < 4; ++which) {
-                auto stepRect = modeTickStepRect(index, which);
-                if (auto* glyph = makeLabel(stepText[which], false, 0.56f, accentColor())) {
-                    fitLabelToWidth(glyph, stepRect.size.width - 6.f);
-                    glyph->setPosition(CCPoint(stepRect.getMidX(), stepRect.getMidY()));
-                    m_modesPane->addChild(glyph, 2);
-                    m_modeTickBtnLabels[index * 4 + which] = glyph;
-                }
-            }
-        }
-        if (auto* applyLabel = makeLabel("apply", true, 0.60f, accentColor())) {
-            auto applyRect = modeApplyRect();
-            fitLabelToWidth(applyLabel, applyRect.size.width - 12.f);
-            applyLabel->setPosition(CCPoint(applyRect.getMidX(), applyRect.getMidY()));
-            m_modesPane->addChild(applyLabel, 2);
-            m_modeApplyLabel = applyLabel;
         }
         if (auto* autoLabel = makeLabel("all auto", false, 0.60f, accentColor())) {
             auto rect = modeTicksAutoRect();
             fitLabelToWidth(autoLabel, rect.size.width - 12.f);
             autoLabel->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
-            m_modesPane->addChild(autoLabel, 2);
+            m_modeTicksPane->addChild(autoLabel, 2);
             m_modeTicksAutoLabel = autoLabel;
         }
 
@@ -4412,12 +4254,9 @@ finally {
 
         float fitScale = std::min(0.86f * safeArea.size.width / DECK_WIDTH, 0.86f * safeArea.size.height / DECK_HEIGHT);
         float comfortableScale = std::min(fitScale, 0.94f);
-        m_fitScale = std::max(fitScale, 0.2f);
-        m_baseScale = comfortableScale * getUIPanelScale();
-        double userMul = std::clamp(Mod::get()->getSavedValue<double>("panel-user-mul", 1.0), 0.1, 8.0);
-        m_deckScale = std::min(std::max(m_baseScale * static_cast<float>(userMul), 0.2f), fitScale);
+        m_deckScale = std::min(std::max(comfortableScale * getUIPanelScale(), 0.2f), fitScale);
         m_deck->setScale(m_deckScale);
-        m_deck->setPosition(clampDeckPosition(savedDeckPosition(), m_deckScale));
+        m_deck->setPosition(CCPoint(safeArea.getMidX(), safeArea.getMidY()));
 
         double savedX = Mod::get()->getSavedValue<double>("ui-button-x", -1.0);
         double savedY = Mod::get()->getSavedValue<double>("ui-button-y", -1.0);
@@ -4432,68 +4271,6 @@ finally {
         }
         m_launcherPosition = clampLauncherPosition(m_launcherPosition);
         m_launcher->setPosition(m_launcherPosition);
-    }
-
-    CCPoint AfterflowOverlay::clampDeckPosition(CCPoint const& position, float scale) const {
-        float halfW = DECK_WIDTH * 0.5f * scale;
-        float halfH = DECK_HEIGHT * 0.5f * scale;
-        float minX = m_safeArea.getMinX() + halfW;
-        float maxX = m_safeArea.getMaxX() - halfW;
-        float minY = m_safeArea.getMinY() + halfH;
-        float maxY = m_safeArea.getMaxY() - halfH;
-
-        if (maxX < minX) { minX = maxX = m_safeArea.getMidX(); }
-        if (maxY < minY) { minY = maxY = m_safeArea.getMidY(); }
-        return CCPoint(std::clamp(position.x, minX, maxX), std::clamp(position.y, minY, maxY));
-    }
-
-    CCPoint AfterflowOverlay::savedDeckPosition() const {
-        double fx = Mod::get()->getSavedValue<double>("panel-pos-x", 0.5);
-        double fy = Mod::get()->getSavedValue<double>("panel-pos-y", 0.5);
-        fx = std::clamp(fx, 0.0, 1.0);
-        fy = std::clamp(fy, 0.0, 1.0);
-        return CCPoint(
-            m_safeArea.getMinX() + static_cast<float>(fx) * m_safeArea.size.width,
-            m_safeArea.getMinY() + static_cast<float>(fy) * m_safeArea.size.height
-        );
-    }
-
-    void AfterflowOverlay::saveDeckPlacement() {
-        auto pos = m_deck->getPosition();
-        float width = std::max(1.f, m_safeArea.size.width);
-        float height = std::max(1.f, m_safeArea.size.height);
-        Mod::get()->setSavedValue<double>("panel-pos-x", (pos.x - m_safeArea.getMinX()) / width);
-        Mod::get()->setSavedValue<double>("panel-pos-y", (pos.y - m_safeArea.getMinY()) / height);
-        Mod::get()->setSavedValue<double>("panel-user-mul", m_deckScale / std::max(m_baseScale, 0.001f));
-    }
-
-    void AfterflowOverlay::resetDeckPlacement() {
-        Mod::get()->setSavedValue<double>("panel-pos-x", 0.5);
-        Mod::get()->setSavedValue<double>("panel-pos-y", 0.5);
-        Mod::get()->setSavedValue<double>("panel-user-mul", 1.0);
-        layout();
-    }
-
-    void AfterflowOverlay::finishDeckGesture() {
-        bool wasResize = m_resizingDeck;
-        bool wasMoved = m_deckMoved;
-        m_draggingDeck = false;
-        m_resizingDeck = false;
-        m_deckMoved = false;
-        m_pressedTarget = HitTarget::None;
-        if (wasMoved) {
-            saveDeckPlacement();
-        }
-        else if (wasResize) {
-            double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-            if (now - m_lastGripTap < 0.45) {
-                m_lastGripTap = -10.0;
-                resetDeckPlacement();
-            }
-            else {
-                m_lastGripTap = now;
-            }
-        }
     }
 
     CCPoint AfterflowOverlay::defaultLauncherPosition() const {
@@ -4854,13 +4631,11 @@ finally {
             }
         }
         m_lastAppliedTab = m_activeTab;
+        if (m_modeTicksPane) { m_modeTicksPane->setVisible(m_activeTab == 3); }
 
         bool const showLog = m_activeTab == 0;
         bool const showStage = m_activeTab == 1;
-        bool const showModes = m_activeTab == 2;
-        bool const showSettings = m_activeTab == 3;
-
-        if (m_modesPane) { m_modesPane->setVisible(showModes); }
+        bool const showSettings = m_activeTab == 2;
 
         if (m_activityLabel) { m_activityLabel->setVisible(showLog); }
         if (m_activityCountLabel) { m_activityCountLabel->setVisible(showLog); }
@@ -5168,46 +4943,26 @@ finally {
             if (m_customRemoveLabel) {
                 m_customRemoveLabel->setVisible(showStageTab && isCustomSelected);
             }
-            drawCurvedRect(
-                m_stageTrack,
-                stageKeyRect(),
-                6.f,
-                color4(accentColor(), m_listeningStageKey ? 46 : 20),
-                color4(accentColor(), m_listeningStageKey ? 160 : 80),
-                1.f
-            );
-            if (m_stageKeyLabel) {
-                m_stageKeyLabel->setVisible(showStageTab);
-                m_stageKeyLabel->setScale(0.72f);
-                if (m_listeningStageKey) {
-                    m_stageKeyLabel->setString("listening for keypress");
-                }
-                else {
-                    m_stageKeyLabel->setString(fmt::format("key: {}", stageKeyText(state.stageIndex)).c_str());
-                }
-                fitLabelToWidth(m_stageKeyLabel, stageKeyRect().size.width - 14.f);
-            }
 
             if (m_stageTimingLabels[2]) {
-                m_stageTimingLabels[2]->setColor(faintTextColor());
-                std::string stageHint;
+                bool const overSafeTicks = isCustomSelected
+                    && (customStage->ticksAll > CUSTOM_TICKS_SAFE || customStage->ticksWave > CUSTOM_TICKS_SAFE);
+                m_stageTimingLabels[2]->setColor(overSafeTicks ? warningColor() : faintTextColor());
                 if (!state.isEnabled) {
-                    stageHint = "raw input, nothing is buffered";
+                    m_stageTimingLabels[2]->setString("raw input, nothing is buffered");
+                }
+                else if (overSafeTicks) {
+                    m_stageTimingLabels[2]->setString(fmt::format("warning: over {} ticks may lag or work worse than {}", CUSTOM_TICKS_SAFE, CUSTOM_TICKS_SAFE).c_str());
                 }
                 else if (isCustomSelected) {
-                    stageHint = fmt::format("tune each delay with -5 / -1 / +1 / +5, up to {} ticks", CUSTOM_TICKS_MAX);
+                    m_stageTimingLabels[2]->setString(fmt::format("tune each delay with -5 / -1 / +1 / +5, up to {} ticks", CUSTOM_TICKS_MAX).c_str());
                 }
                 else if (canAddCustom) {
-                    stageHint = "tap + custom to make an editable copy of this stage";
+                    m_stageTimingLabels[2]->setString("tap + custom to make an editable copy of this stage");
                 }
                 else {
-                    stageHint = "custom stage limit reached";
+                    m_stageTimingLabels[2]->setString("custom stage limit reached");
                 }
-                auto boundKey = stageKeyText(state.stageIndex);
-                if (!isMobileHost() && stageHint.size() + boundKey.size() < 62) {
-                    stageHint += fmt::format(" | key: {}", boundKey);
-                }
-                m_stageTimingLabels[2]->setString(stageHint.c_str());
             }
         }
 
@@ -5278,18 +5033,18 @@ finally {
             );
         }
 
-        renderLogRows(m_activityLines, LOG_LINE_COUNT, logs, paneScroll, LOG_WIDTH - 130.f, LOG_LINE_STEP - 10.f, 0.96f * getUIFontScale(), true);
+        renderLogRows(m_activityLines, LOG_LINE_COUNT, logs, paneScroll, LOG_WIDTH - 130.f, 0.96f * getUIFontScale(), true);
         if (logs.empty() && m_activityLines[0]) {
             auto* line = m_activityLines[0];
-            wrapLogLine(line, "> no activity yet / inputs will appear here", LOG_WIDTH - 130.f, LOG_LINE_STEP - 10.f);
+            fitLogLine(line, "> no activity yet / inputs will appear here", LOG_WIDTH - 130.f);
             line->setColor(faintTextColor());
         }
 
         if (m_logLayer) {
-            renderLogRows(m_logViewLines, LOG_VIEW_LINE_COUNT, logs, viewScroll, LOG_VIEW_CARD_WIDTH - 70.f, LOG_VIEW_LINE_STEP - 8.f, LOG_VIEW_LINE_SCALE * getUIFontScale(), true);
+            renderLogRows(m_logViewLines, LOG_VIEW_LINE_COUNT, logs, viewScroll, LOG_VIEW_CARD_WIDTH - 70.f, LOG_VIEW_LINE_SCALE * getUIFontScale(), true);
             if (logs.empty() && m_logViewLines[0]) {
                 auto* line = m_logViewLines[0];
-                wrapLogLine(line, "> no activity yet / inputs will appear here", LOG_VIEW_CARD_WIDTH - 70.f, LOG_VIEW_LINE_STEP - 8.f);
+                fitLogLine(line, "> no activity yet / inputs will appear here", LOG_VIEW_CARD_WIDTH - 70.f);
                 line->setColor(faintTextColor());
             }
             if (m_logViewCountLabel) {
@@ -5384,41 +5139,6 @@ finally {
         }
     }
 
-    void AfterflowOverlay::popupTick(float) {
-        auto* scene = CCScene::get();
-        bool popupOpen = false;
-        if (scene) {
-            auto* children = scene->getChildren();
-            for (unsigned int index = 0; children && index < children->count(); ++index) {
-                auto* node = typeinfo_cast<CCNode*>(children->objectAtIndex(index));
-                if (node && node != this && node->isVisible() && typeinfo_cast<FLAlertLayer*>(node)) {
-                    popupOpen = true;
-                    break;
-                }
-            }
-        }
-        if (popupOpen == m_popupHidden) {
-            return;
-        }
-        m_popupHidden = popupOpen;
-        setVisible(!popupOpen);
-        setTouchEnabled(!popupOpen && (m_isOpen || isMobileHost()));
-    }
-
-    void AfterflowOverlay::FLAlert_Clicked(FLAlertLayer*, bool) {
-        if (!m_hiddenForAlert) {
-            return;
-        }
-        m_hiddenForAlert = false;
-        if (!m_isOpen) {
-            return;
-        }
-        if (m_deck) { m_deck->setVisible(true); }
-        if (m_scrim) { m_scrim->setVisible(true); }
-        setTouchEnabled(true);
-        refresh();
-    }
-
     void AfterflowOverlay::openPanel() {
         if (m_isOpen) {
             return;
@@ -5429,7 +5149,6 @@ finally {
         m_logLastCount = 0;
         if (!isMobileHost()) {
             setTouchEnabled(true);
-            setMouseEnabled(true);
         }
         if (m_launcher) {
             m_launcher->setVisible(false);
@@ -5465,14 +5184,6 @@ finally {
         m_logDragging = false;
         m_logDragMoved = false;
         m_isOpen = false;
-        if (m_listeningStageKey) {
-            m_listeningStageKey = false;
-            cocos2d::CCKeyboardDispatcher::get()->removeDelegate(this);
-        }
-        if (!isMobileHost()) {
-            setMouseEnabled(false);
-            setTouchEnabled(false);
-        }
         unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
         unschedule(schedule_selector(AfterflowOverlay::animTick));
 
@@ -5530,13 +5241,11 @@ finally {
 
     void AfterflowOverlay::onEnter() {
         if (!isMobileHost()) {
-            setMouseEnabled(m_isOpen);
+            setMouseEnabled(true);
         }
         CCLayer::onEnter();
         layout();
         refresh();
-        unschedule(schedule_selector(AfterflowOverlay::popupTick));
-        schedule(schedule_selector(AfterflowOverlay::popupTick), 0.15f);
         if (m_deck && !m_isOpen) {
             m_deck->setVisible(false);
         }
@@ -5549,9 +5258,6 @@ finally {
     }
 
     void AfterflowOverlay::onExit() {
-        if (!isMobileHost()) {
-            setMouseEnabled(false);
-        }
         m_isOpen = false;
         m_didPauseForPanel = false;
         m_isDraggingLauncher = false;
@@ -5559,7 +5265,6 @@ finally {
         m_pressedNode = nullptr;
         unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
         unschedule(schedule_selector(AfterflowOverlay::animTick));
-        unschedule(schedule_selector(AfterflowOverlay::popupTick));
         CCLayer::onExit();
     }
 
@@ -5595,9 +5300,6 @@ finally {
 
     bool AfterflowOverlay::ccTouchBegan(CCTouch* touch, CCEvent*) {
         if (!touch) {
-            return false;
-        }
-        if (m_hiddenForAlert || m_popupHidden) {
             return false;
         }
         if (m_isOpen) {
@@ -5642,28 +5344,14 @@ finally {
             if (m_editingRow >= 0 && !(m_pressedTarget == HitTarget::TickField && stageSlot == m_editingRow)) {
                 endTickEdit();
             }
-            if (m_pressedTarget == HitTarget::DragPanel || m_pressedTarget == HitTarget::Resize) {
-                m_deck->stopAllActions();
-                m_deck->setScale(m_deckScale);
-                m_deckMoved = false;
-                m_dragTouchStart = convertTouchToNodeSpace(touch);
-                auto deckPos = m_deck->getPosition();
-                if (m_pressedTarget == HitTarget::DragPanel) {
-                    m_draggingDeck = true;
-                    m_dragDeckStart = deckPos;
-                }
-                else {
-                    m_resizingDeck = true;
-                    m_resizeTL = CCPoint(
-                        deckPos.x - DECK_WIDTH * 0.5f * m_deckScale,
-                        deckPos.y + DECK_HEIGHT * 0.5f * m_deckScale
-                    );
-                }
-                return true;
-            }
             if (m_pressedTarget == HitTarget::TickSlider) {
                 m_draggingSlider = true;
                 m_sliderRow = stageSlot;
+                m_sliderStartedOver = false;
+                if (auto* sliderStage = customStageFor(state.stageIndex)) {
+                    int startTicks = stageSlot == 0 ? sliderStage->ticksAll : sliderStage->ticksWave;
+                    m_sliderStartedOver = startTicks > CUSTOM_TICKS_SAFE;
+                }
                 setSliderFromX(deckPoint.x);
                 return true;
             }
@@ -5703,35 +5391,6 @@ finally {
             }
             m_launcherPosition = clampLauncherPosition(CCPoint(local.x + m_launcherDragOffset.x, local.y + m_launcherDragOffset.y));
             m_launcher->setPosition(m_launcherPosition);
-            return;
-        }
-
-        if (m_draggingDeck || m_resizingDeck) {
-            CCPoint local = convertTouchToNodeSpace(touch);
-            float deltaX = local.x - m_dragTouchStart.x;
-            float deltaY = local.y - m_dragTouchStart.y;
-            if (deltaX * deltaX + deltaY * deltaY > 25.f) {
-                m_deckMoved = true;
-            }
-            if (m_draggingDeck) {
-                m_deck->setPosition(clampDeckPosition(
-                    CCPoint(m_dragDeckStart.x + deltaX, m_dragDeckStart.y + deltaY), m_deckScale
-                ));
-            }
-            else if (m_deckMoved) {
-                float scaleX = (local.x - m_resizeTL.x) / DECK_WIDTH;
-                float scaleY = (m_resizeTL.y - local.y) / DECK_HEIGHT;
-                float newScale = std::clamp((scaleX + scaleY) * 0.5f, 0.2f, m_fitScale);
-                m_deckScale = newScale;
-                m_deck->setScale(newScale);
-                m_deck->setPosition(clampDeckPosition(
-                    CCPoint(
-                        m_resizeTL.x + DECK_WIDTH * 0.5f * newScale,
-                        m_resizeTL.y - DECK_HEIGHT * 0.5f * newScale
-                    ),
-                    newScale
-                ));
-            }
             return;
         }
 
@@ -5801,17 +5460,20 @@ finally {
             return;
         }
 
-        if (m_draggingDeck || m_resizingDeck) {
-            finishDeckGesture();
-            return;
-        }
-
         if (m_draggingSlider) {
             int releasedRow = m_sliderRow;
             m_draggingSlider = false;
             m_sliderRow = -1;
             m_pressedTarget = HitTarget::None;
             saveCustomStages();
+            if (releasedRow >= 0 && releasedRow <= 1 && !m_sliderStartedOver) {
+                if (auto* sliderStage = customStageFor(state.stageIndex)) {
+                    int endTicks = releasedRow == 0 ? sliderStage->ticksAll : sliderStage->ticksWave;
+                    if (endTicks > CUSTOM_TICKS_SAFE) {
+                        showHighTicksPopup();
+                    }
+                }
+            }
             return;
         }
 
@@ -5896,10 +5558,6 @@ finally {
     }
 
     void AfterflowOverlay::ccTouchCancelled(CCTouch*, CCEvent*) {
-        if (m_draggingDeck || m_resizingDeck) {
-            finishDeckGesture();
-            return;
-        }
         m_logDragging = false;
         m_logDragMoved = false;
         m_logViewDragging = false;
@@ -6421,9 +6079,14 @@ finally {
         if (ticks == value) {
             return;
         }
+        bool const crossedSafe = ticks <= CUSTOM_TICKS_SAFE && value > CUSTOM_TICKS_SAFE;
         ticks = value;
         saveCustomStages();
         setStageIndex(state.stageIndex);
+        if (crossedSafe) {
+            endTickEdit();
+            showHighTicksPopup();
+        }
     }
 
     void AfterflowOverlay::setSliderFromX(float x) {
@@ -6444,9 +6107,6 @@ finally {
     }
 
     AfterflowOverlay::HitTarget AfterflowOverlay::hitTest(CCPoint const& point, int* stageSlot) const {
-        if (CCRect(DECK_WIDTH - 38.f, 0.f, 38.f, 26.f).containsPoint(point)) {
-            return HitTarget::Resize;
-        }
         if (logoRect().containsPoint(point)) {
             return HitTarget::Logo;
         }
@@ -6456,10 +6116,27 @@ finally {
                 return HitTarget::Tab;
             }
         }
-        if (m_activeTab == 3 && creditsRect().containsPoint(point)) {
+        if (m_activeTab == 3) {
+            for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+                for (int which = 0; which < 4; ++which) {
+                    if (modeTickStepRect(index, which).containsPoint(point)) {
+                        if (stageSlot) { *stageSlot = index * 4 + which; }
+                        return HitTarget::ModeTick;
+                    }
+                }
+                if (modeTickCellRect(index).containsPoint(point)) {
+                    if (stageSlot) { *stageSlot = index; }
+                    return HitTarget::ModeTickReset;
+                }
+            }
+            if (modeTicksAutoRect().containsPoint(point)) {
+                return HitTarget::ModeTicksAuto;
+            }
+        }
+        if (m_activeTab == 2 && creditsRect().containsPoint(point)) {
             return HitTarget::Credits;
         }
-        if (m_activeTab == 3) {
+        if (m_activeTab == 2) {
             for (int index = 0; index < THEME_COUNT; ++index) {
                 if (swatchRect(index).containsPoint(point)) {
                     if (stageSlot) { *stageSlot = index; }
@@ -6482,37 +6159,6 @@ finally {
             }
         }
         if (m_activeTab == 2) {
-            for (int index = 0; index < MODE_TICK_COUNT; ++index) {
-                for (int which = 0; which < 4; ++which) {
-                    if (modeTickStepRect(index, which).containsPoint(point)) {
-                        if (stageSlot) { *stageSlot = index * 4 + which; }
-                        return HitTarget::ModeTick;
-                    }
-                }
-                auto iconRect = modeTickIconRect(index);
-                CCRect iconArea(
-                    iconRect.getMinX() - 6.f,
-                    iconRect.getMinY() - 6.f,
-                    iconRect.size.width + 12.f,
-                    iconRect.size.height + 12.f
-                );
-                if (iconArea.containsPoint(point)) {
-                    if (stageSlot) { *stageSlot = index; }
-                    return HitTarget::ModeIconIgnore;
-                }
-                if (modeTickCellRect(index).containsPoint(point)) {
-                    if (stageSlot) { *stageSlot = index; }
-                    return HitTarget::ModeTickReset;
-                }
-            }
-            if (modeApplyRect().containsPoint(point)) {
-                return HitTarget::ModesApply;
-            }
-            if (modeTicksAutoRect().containsPoint(point)) {
-                return HitTarget::ModeTicksAuto;
-            }
-        }
-        if (m_activeTab == 3) {
             if (configButtonRect(0).containsPoint(point)) {
                 if (stageSlot) { *stageSlot = 0; }
                 return HitTarget::ImportConfig;
@@ -6548,13 +6194,10 @@ finally {
                 }
             }
         }
-        if (m_activeTab == 3 && creditsRect().containsPoint(point)) {
+        if (m_activeTab == 2 && creditsRect().containsPoint(point)) {
             return HitTarget::Credits;
         }
         if (m_activeTab == 1) {
-            if (stageKeyRect().containsPoint(point)) {
-                return HitTarget::StageKey;
-            }
             if (customAddRect().containsPoint(point)) {
                 return HitTarget::StageAdd;
             }
@@ -6583,9 +6226,6 @@ finally {
                     }
                 }
             }
-        }
-        if (point.y >= DECK_HEIGHT - 54.f) {
-            return HitTarget::DragPanel;
         }
         return HitTarget::None;
     }
@@ -6666,21 +6306,8 @@ finally {
             return;
         }
 
-        if (target == HitTarget::ModeIconIgnore) {
-            refresh();
-            return;
-        }
-
         if (target == HitTarget::ModeTickReset) {
             setModeTicksAt(m_pressedStageSlot, 0);
-            refresh();
-            return;
-        }
-
-        if (target == HitTarget::ModesApply) {
-            applyStage();
-            clearQueuedPresses();
-            setConfigStatus("applied your mode delays", true);
             refresh();
             return;
         }
@@ -6746,15 +6373,6 @@ finally {
                 }
                 break;
             }
-            case HitTarget::StageKey: {
-                if (!m_listeningStageKey) {
-                    cocos2d::CCKeyboardDispatcher::get()->addDelegate(this);
-                }
-                m_listeningStageKey = true;
-                refresh();
-                say("listening for keypress for {}", stageTitleAt(state.stageIndex));
-                break;
-            }
             case HitTarget::CustomRemove: {
                 loadCustomStages();
                 int custom = state.stageIndex - STAGE_TABLE_SIZE;
@@ -6791,6 +6409,9 @@ finally {
                         saveCustomStages();
                         setStageIndex(state.stageIndex);
                         refresh();
+                        if (before <= CUSTOM_TICKS_SAFE && ticks > CUSTOM_TICKS_SAFE) {
+                            showHighTicksPopup();
+                        }
                     }
                 }
                 break;
@@ -6836,8 +6457,7 @@ finally {
         std::string text = fmt::format(
             "{{\"groundHorizonTicks\":{},\"waveHorizonTicks\":{},\"spamGapTicks\":{},"
             "\"autoReleaseWindowTicks\":{},\"orbWindowTicks\":{},\"shipMaxDelayTicks\":{},"
-            "\"shipSpamGapTicks\":{},\"robotHoldTicks\":{},"
-            "\"modeTicks\":[{},{},{},{},{},{},{},{}]}}",
+            "\"shipSpamGapTicks\":{},\"robotHoldTicks\":{}}}",
             state.groundHorizonTicks,
             state.waveHorizonTicks,
             state.spamGapTicks,
@@ -6845,15 +6465,7 @@ finally {
             state.orbWindowTicks,
             state.shipMaxDelayTicks,
             state.shipSpamGapTicks,
-            robotHoldHistory.pick(20, 50),
-            modeTicksAt(0),
-            modeTicksAt(1),
-            modeTicksAt(2),
-            modeTicksAt(3),
-            modeTicksAt(4),
-            modeTicksAt(5),
-            modeTicksAt(6),
-            modeTicksAt(7)
+            robotHoldHistory.pick(20, 50)
         );
         bool ok = geode::utils::clipboard::write(text.c_str());
         setConfigStatus(ok ? "exported to clipboard" : "export failed", ok);
@@ -6902,16 +6514,6 @@ finally {
         }
         if (jsonInt(text, "robotHoldTicks", value)) {
             robotHoldHistory.add(std::clamp(value, 1, 200));
-            ++applied;
-        }
-
-        std::vector<int> importedModeTicks;
-        if (jsonIntList(text, "modeTicks", importedModeTicks)) {
-            loadModeTicks();
-            for (int index = 0; index < MODE_TICK_COUNT && index < static_cast<int>(importedModeTicks.size()); ++index) {
-                g_modeTicks[index] = clampModeTicks(importedModeTicks[index]);
-            }
-            saveModeTicks();
             ++applied;
         }
 
@@ -7128,13 +6730,10 @@ finally {
         if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
             return;
         }
-        if (typeinfo_cast<CCTransitionScene*>(scene)) {
-            return;
-        }
         static bool announcedBuild = false;
         if (!announcedBuild) {
             announcedBuild = true;
-            log::info("afterflow: building overlay on first scene ({})", typeid(*scene).name());
+            log::info("afterflow: building overlay on first scene");
         }
         auto* overlay = AfterflowOverlay::create();
         if (!overlay) {
@@ -7149,27 +6748,14 @@ finally {
         }
     }
 
-    void queueOverlayBuild(int attempts) {
-        Loader::get()->queueInMainThread([attempts] {
-            auto* runningScene = CCScene::get();
-            if (!runningScene) {
-                return;
-            }
-            if (typeinfo_cast<CCTransitionScene*>(runningScene)) {
-                if (attempts < 120) {
-                    queueOverlayBuild(attempts + 1);
-                }
-                return;
-            }
-            buildAfterflowOverlay(runningScene);
-        });
-    }
-
     void attachAfterflowOverlay(CCScene* scene) {
         if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
             return;
         }
-        queueOverlayBuild(0);
+
+        Loader::get()->queueInMainThread([] {
+            buildAfterflowOverlay(CCScene::get());
+        });
     }
 
     void ensureAfterflowOverlay() {
@@ -7191,7 +6777,7 @@ finally {
 
     void toggleAfterflowPanel() {
         auto* scene = CCScene::get();
-        if (!scene || typeinfo_cast<CCTransitionScene*>(scene)) {
+        if (!scene) {
             return;
         }
         auto* overlay = scene->getChildByType<AfterflowOverlay>(0);
@@ -7204,7 +6790,7 @@ finally {
         }
     }
 
-    void retireGhostPlayers() {
+    void dropGhosts() {
         for (auto** ghostSlot : { &state.ghostPlayer1, &state.ghostPlayer2 }) {
             if (*ghostSlot) {
                 (*ghostSlot)->removeFromParentAndCleanup(true);
@@ -7221,23 +6807,16 @@ finally {
         state.isInjecting = false;
         state.rapidInputTicks = 0;
         state.wasAutoReleased = false;
-        state.ghostLayerBaseIndex = 0;
         state.pathDrawNode = nullptr;
-        clearQueuedPresses();
+        resetPending();
     }
 
-    PlayerObject* createGhostPlayer(PlayLayer* gameLayer) {
+    PlayerObject* makeGhost(PlayLayer* gameLayer) {
         if (!state.ghostRenderLayer) {
             state.ghostRenderLayer = CCLayer::create();
-            if (!state.ghostRenderLayer) {
-                return nullptr;
-            }
             state.ghostRenderLayer->retain();
         }
         auto* ghostPlayer = PlayerObject::create(1, 1, gameLayer, state.ghostRenderLayer, true);
-        if (!ghostPlayer) {
-            return nullptr;
-        }
         ghostPlayer->retain();
         ghostPlayer->setPosition(CCPoint(0.f, 105.f));
         ghostPlayer->setVisible(false);
@@ -7248,54 +6827,10 @@ finally {
         return ghostPlayer;
     }
 
-    template <class NodeType>
-    void clearNodeSlot(NodeType*& slot, void* goneNode) {
-        if (slot && reinterpret_cast<void*>(slot) == goneNode) {
-            slot = nullptr;
-        }
-    }
-
-    void detachGhostNodeSlot(PlayerObject* ghostPlayer, CCNode* ghostNode) {
-        if (!ghostPlayer || !ghostNode) {
-            return;
-        }
-        void* goneNode = ghostNode;
-        clearNodeSlot(ghostPlayer->m_playerGroundParticles, goneNode);
-        clearNodeSlot(ghostPlayer->m_trailingParticles, goneNode);
-        clearNodeSlot(ghostPlayer->m_shipClickParticles, goneNode);
-        clearNodeSlot(ghostPlayer->m_vehicleGroundParticles, goneNode);
-        clearNodeSlot(ghostPlayer->m_ufoClickParticles, goneNode);
-        clearNodeSlot(ghostPlayer->m_robotBurstParticles, goneNode);
-        clearNodeSlot(ghostPlayer->m_dashParticles, goneNode);
-        clearNodeSlot(ghostPlayer->m_swingBurstParticles1, goneNode);
-        clearNodeSlot(ghostPlayer->m_swingBurstParticles2, goneNode);
-        clearNodeSlot(ghostPlayer->m_landParticles0, goneNode);
-        clearNodeSlot(ghostPlayer->m_landParticles1, goneNode);
-        clearNodeSlot(ghostPlayer->m_dashFireSprite, goneNode);
-        clearNodeSlot(ghostPlayer->m_dashSpritesContainer, goneNode);
-        clearNodeSlot(ghostPlayer->m_regularTrail, goneNode);
-        clearNodeSlot(ghostPlayer->m_shipStreak, goneNode);
-        clearNodeSlot(ghostPlayer->m_waveTrail, goneNode);
-        clearNodeSlot(ghostPlayer->m_ghostTrail, goneNode);
-        clearNodeSlot(ghostPlayer->m_swingFireMiddle, goneNode);
-        clearNodeSlot(ghostPlayer->m_swingFireBottom, goneNode);
-        clearNodeSlot(ghostPlayer->m_swingFireTop, goneNode);
-        clearNodeSlot(ghostPlayer->m_dashRing, goneNode);
-        if (ghostPlayer->m_particleSystems) {
-            auto* particleList = ghostPlayer->m_particleSystems;
-            for (int slotIndex = static_cast<int>(particleList->count()) - 1; slotIndex >= 0; --slotIndex) {
-                if (reinterpret_cast<void*>(particleList->objectAtIndex(slotIndex)) == goneNode) {
-                    particleList->removeObjectAtIndex(slotIndex);
-                }
-            }
-        }
-    }
-
-    void clearGhostScenery() {
+    void sweepGhostLayer() {
         if (!state.ghostRenderLayer) {
             return;
         }
-
         auto* childArray = state.ghostRenderLayer->getChildren();
         while (childArray && childArray->count() > state.ghostLayerBaseIndex) {
             auto* childNode = static_cast<CCNode*>(childArray->lastObject());
@@ -7303,52 +6838,14 @@ finally {
         }
     }
 
-    struct LayerChildCount {
-        CCNode* parentNode;
-        unsigned childCount;
-    };
-
-    std::vector<LayerChildCount> g_layerChildCounts;
-
-    PlayerObject* g_trackedGround1 = nullptr;
-    PlayerObject* g_trackedGround2 = nullptr;
-
-    [[maybe_unused]] void recordLayerChildCounts(PlayLayer* gameLayer) {
-        g_layerChildCounts.clear();
-        if (!gameLayer) {
-            return;
-        }
-        auto addParent = [](CCNode* parentNode) {
-            if (parentNode) {
-                g_layerChildCounts.push_back({ parentNode, parentNode->getChildrenCount() });
-            }
-        };
-
-        addParent(gameLayer);
-        addParent(gameLayer->m_objectLayer);
-        if (gameLayer->m_aboveShaderObjectLayer != gameLayer->m_objectLayer) {
-            addParent(gameLayer->m_aboveShaderObjectLayer);
-        }
-    }
-
-    [[maybe_unused]] void prunePredictionNodes() {
-        for (auto const& recorded : g_layerChildCounts) {
-            auto* childList = recorded.parentNode->getChildren();
-            while (childList && childList->count() > recorded.childCount) {
-                recorded.parentNode->removeChild(static_cast<CCNode*>(childList->lastObject()), true);
-            }
-        }
-        g_layerChildCounts.clear();
-    }
-
-    void forwardPressToGame(PlayLayer* gameLayer, bool isDown) {
+    void sendButton(PlayLayer* gameLayer, bool isDown) {
         state.isInjecting = true;
         state.hasAppliedInput = isDown;
         gameLayer->handleButton(isDown, 1, state.isFirstPlayer);
         state.isInjecting = false;
     }
 
-    void applyGhostPress(PlayerObject* ghostPlayer, bool isDown) {
+    void pressGhost(PlayerObject* ghostPlayer, bool isDown) {
         (ghostPlayer == state.ghostPlayer1 ? state.isHeld1 : state.isHeld2) = isDown;
         if (isDown) {
             ghostPlayer->pushButton(PlayerButton::Jump);
@@ -7358,11 +6855,7 @@ finally {
         }
     }
 
-    void* dictionaryVtable();
-    bool isDictionaryPointer(void* pointer);
-    [[maybe_unused]] CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary);
-
-    void mirrorStateIntoGhost(PlayerObject* ghostPlayer, PlayerObject* realPlayer) {
+    void copyState(PlayerObject* ghostPlayer, PlayerObject* realPlayer) {
         ghostPlayer->setVisible(false);
         ghostPlayer->resetTouchedRings(true);
         ghostPlayer->copyAttributes(realPlayer);
@@ -7467,7 +6960,6 @@ finally {
 
         ghostPlayer->m_lastGroundObject = realPlayer->m_lastGroundObject;
         ghostPlayer->m_preLastGroundObject = realPlayer->m_preLastGroundObject;
-
         ghostPlayer->m_maybeLastGroundObject = realPlayer->m_maybeLastGroundObject;
         ghostPlayer->m_collidedObject = realPlayer->m_collidedObject;
         ghostPlayer->m_objectSnappedTo = realPlayer->m_objectSnappedTo;
@@ -7512,7 +7004,7 @@ finally {
         return playerObject->m_isRobot ? InputKind::Robot : InputKind::Tap;
     }
 
-    void logRealInputPress(bool isDown, PlayerObject* player1) {
+    void recordRealInput(bool isDown, PlayerObject* player1) {
         if (isDown) {
             lastPressTick = currentTick;
             lastPressKind = kindOf(player1);
@@ -7533,15 +7025,15 @@ finally {
         }
     }
 
-    void dropHeldPress() {
+    void forgetPress() {
         lastPressTick = -1;
     }
 
-    int estimateHoldTicks() {
+    int holdEstimate() {
         return tapHoldHistory.pick(st(12), 50);
     }
 
-    void rememberObjectState(GameObject* gameObject) {
+    void snapshotObject(GameObject* gameObject) {
         if (!gameObject || state.simulationUsedObjects.contains(gameObject)) {
             return;
         }
@@ -7552,19 +7044,17 @@ finally {
             snapshot.isActivatedByEffect = effectObject->m_activated;
             snapshot.byPlayer1 = effectObject->m_activatedByPlayer1;
             snapshot.byPlayer2 = effectObject->m_activatedByPlayer2;
-            snapshot.animationTriggered = effectObject->m_animationTriggered;
         }
         state.objectSnapshots.push_back(snapshot);
     }
 
-    void reassertObjectStates() {
+    void restoreObjects() {
         for (auto const& snapshot : state.objectSnapshots) {
             snapshot.gameObject->m_isActivated = snapshot.isObjectActivated;
             if (snapshot.effectObject) {
                 snapshot.effectObject->m_activated = snapshot.isActivatedByEffect;
                 snapshot.effectObject->m_activatedByPlayer1 = snapshot.byPlayer1;
                 snapshot.effectObject->m_activatedByPlayer2 = snapshot.byPlayer2;
-                snapshot.effectObject->m_animationTriggered = snapshot.animationTriggered;
             }
         }
         state.objectSnapshots.clear();
@@ -7589,257 +7079,12 @@ finally {
         ghostPlayer->updateRotation(deltaTime);
     }
 
-    std::unordered_set<CCDictionary*> g_seenGhostLogs;
-    int g_badLogPointers = 0;
-
-    void* dictionaryVtable() {
-        static void* cachedVtable = nullptr;
-        if (!cachedVtable) {
-            auto* sample = CCDictionary::create();
-            if (sample) {
-                cachedVtable = *reinterpret_cast<void**>(sample);
-                sample->release();
-            }
-        }
-        return cachedVtable;
-    }
-
-    bool isDictionaryPointer(void* pointer) {
-        if (!pointer) {
-            return false;
-        }
-#ifdef GEODE_IS_WINDOWS
-        void* vtable = dictionaryVtable();
-        if (!vtable) {
-            return false;
-        }
-        void* actual = nullptr;
-        if (!ReadProcessMemory(GetCurrentProcess(), pointer, &actual, sizeof(actual), nullptr)) {
-            return false;
-        }
-        return actual == vtable;
-#else
-        return true;
-#endif
-    }
-
-    [[maybe_unused]] CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary) {
-        if (!logDictionary) {
-            return nullptr;
-        }
-        if (isDictionaryPointer(logDictionary)) {
-            return logDictionary;
-        }
-        if (++g_badLogPointers <= 4) {
-            log::warn("afterflow: ghost collision log {} is not a dictionary, dropping the stale pointer instead of clearing it", static_cast<void*>(logDictionary));
-        }
-        return nullptr;
-    }
-
-    void clearCollisionLog(CCDictionary* log) {
-        if (log && isDictionaryPointer(log)) {
-            if (g_seenGhostLogs.insert(log).second) {
-                log::info("afterflow: ghost collision log {} first cleared with {} entries", static_cast<void*>(log), log->count());
-            }
-            log->removeAllObjects();
-        }
-    }
-
-    int logCount(CCDictionary* log) {
-        return log && isDictionaryPointer(log) ? static_cast<int>(log->count()) : -1;
-    }
-
-    std::string collisionCounts(PlayerObject* playerObject) {
-        if (!playerObject) {
-            return "none";
-        }
-        return fmt::format("top{} bottom{} left{} right{}",
-            logCount(playerObject->m_collisionLogTop),
-            logCount(playerObject->m_collisionLogBottom),
-            logCount(playerObject->m_collisionLogLeft),
-            logCount(playerObject->m_collisionLogRight));
-    }
-
-    std::string pointerClass(void* objectPointer) {
-        if (!objectPointer) {
-            return "null";
-        }
-#ifndef GEODE_IS_WINDOWS
-        return "unknown";
-#else
-        void* vtable = nullptr;
-        if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
-            return "unreadable";
-        }
-        HMODULE module = nullptr;
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCWSTR>(vtable), &module) || !module) {
-            return "no module";
-        }
-        wchar_t path[MAX_PATH] = {};
-        GetModuleFileNameW(module, path, MAX_PATH);
-        uintptr_t offset = reinterpret_cast<uintptr_t>(vtable) - reinterpret_cast<uintptr_t>(module);
-        std::string name = std::filesystem::path(path).filename().string();
-        std::string text = fmt::format("{}+0x{:X}", name, offset);
-        if (name == "GeometryDash.exe") {
-            auto* gameObject = reinterpret_cast<GameObject*>(objectPointer);
-            text += fmt::format(" id{}", gameObject->m_objectID);
-        }
-        return text;
-#endif
-    }
-
-    std::string playerLogLabel(CCDictionary* dictionary) {
-        auto* gameLayer = PlayLayer::get();
-        if (!gameLayer || !dictionary) {
-            return {};
-        }
-        PlayerObject* players[2] = { gameLayer->m_player1, gameLayer->m_player2 };
-        char const* playerNames[2] = { "player1", "player2" };
-        for (int playerIndex = 0; playerIndex < 2; ++playerIndex) {
-            auto* player = players[playerIndex];
-            if (!player) {
-                continue;
-            }
-            if (dictionary == player->m_collisionLogTop) {
-                return fmt::format("{}.top", playerNames[playerIndex]);
-            }
-            if (dictionary == player->m_collisionLogBottom) {
-                return fmt::format("{}.bottom", playerNames[playerIndex]);
-            }
-            if (dictionary == player->m_collisionLogLeft) {
-                return fmt::format("{}.left", playerNames[playerIndex]);
-            }
-            if (dictionary == player->m_collisionLogRight) {
-                return fmt::format("{}.right", playerNames[playerIndex]);
-            }
-        }
-        return {};
-    }
-
-    void* ccobjectVtable() {
-#ifdef GEODE_IS_WINDOWS
-        static void* cachedVtable = nullptr;
-        if (!cachedVtable) {
-            if (HMODULE module = GetModuleHandleW(L"libcocos2d.dll")) {
-                cachedVtable = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(module) + 0xE65C0);
-            }
-        }
-        return cachedVtable;
-#else
-        return nullptr;
-#endif
-    }
-
-    bool isDeadCocosObject(void* objectPointer) {
-        if (!objectPointer) {
-            return false;
-        }
-#ifndef GEODE_IS_WINDOWS
-        return false;
-#else
-        void* vtable = nullptr;
-        if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
-            return true;
-        }
-        void* freedVtable = ccobjectVtable();
-        if (freedVtable && vtable == freedVtable) {
-            return true;
-        }
-        HMODULE module = nullptr;
-        return !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(vtable), &module);
-#endif
-    }
-
-    bool isGameObjectPointer(void* objectPointer) {
-        if (!objectPointer) {
-            return false;
-        }
-#ifndef GEODE_IS_WINDOWS
-        return true;
-#else
-        void* vtable = nullptr;
-        if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
-            return false;
-        }
-        HMODULE module = nullptr;
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCWSTR>(vtable), &module) || !module) {
-            return false;
-        }
-        wchar_t path[MAX_PATH] = {};
-        GetModuleFileNameW(module, path, MAX_PATH);
-        return std::filesystem::path(path).filename().string() == "GeometryDash.exe";
-#endif
-    }
-
-    void pruneDictionaryEntries(CCDictionary* dictionary, std::string const& logName, bool requireGameObject) {
-        int const pendingEntries = static_cast<int>(dictionary->count());
-        if (pendingEntries <= 0) {
-            return;
-        }
-        std::string remarks;
-        int prunedCount = 0;
-        auto* keyObjects = dictionary->allKeys();
-        if (keyObjects) {
-            int const maxShown = std::min<int>(static_cast<int>(keyObjects->count()), 16);
-            for (int index = 0; index < maxShown; ++index) {
-                auto* keyObject = keyObjects->objectAtIndex(index);
-                auto* keyAsInteger = typeinfo_cast<CCInteger*>(keyObject);
-                if (!keyAsInteger) {
-                    continue;
-                }
-                intptr_t entryKey = static_cast<intptr_t>(keyAsInteger->getValue());
-                auto* entryValue = dictionary->objectForKey(entryKey);
-                bool const isStale = isDeadCocosObject(entryValue) || (requireGameObject && !isGameObjectPointer(entryValue));
-                if (!isStale) {
-                    continue;
-                }
-                ++prunedCount;
-                if (!remarks.empty()) {
-                    remarks += " ";
-                }
-                remarks += fmt::format("[k{} -> {} dropped]", entryKey, static_cast<void*>(entryValue));
-                dictionary->removeObjectForKey(entryKey);
-            }
-        }
-        if (!prunedCount && logName.empty()) {
-            return;
-        }
-        static int prunesLogged = 0;
-        if (prunesLogged >= 25) {
-            return;
-        }
-        ++prunesLogged;
-        log::warn("afterflow: {} {} {} entries, {} stale: {} (p1 ground {} p2 ground {})", logName.empty() ? "dictionary" : logName,
-            static_cast<void*>(dictionary), pendingEntries, prunedCount, remarks.empty() ? "none" : remarks,
-            g_trackedGround1 ? static_cast<void*>(g_trackedGround1->m_maybeLastGroundObject) : nullptr,
-            g_trackedGround2 ? static_cast<void*>(g_trackedGround2->m_maybeLastGroundObject) : nullptr);
-        if (prunesLogged == 25) {
-            log::warn("afterflow: further dictionary sanitizing will not be logged");
-        }
-    }
-
     void checkGhost(PlayLayer* gameLayer, PlayerObject* ghostPlayer, float deltaTime) {
-        auto* realFirst = gameLayer->m_player1;
-        bool const hasReal = realFirst && realFirst != ghostPlayer;
-        std::string const realBefore = hasReal ? collisionCounts(realFirst) : "none";
-        ghostPlayer->m_collisionLogTop = keepGhostCollisionLog(ghostPlayer->m_collisionLogTop);
-        ghostPlayer->m_collisionLogBottom = keepGhostCollisionLog(ghostPlayer->m_collisionLogBottom);
-        ghostPlayer->m_collisionLogLeft = keepGhostCollisionLog(ghostPlayer->m_collisionLogLeft);
-        ghostPlayer->m_collisionLogRight = keepGhostCollisionLog(ghostPlayer->m_collisionLogRight);
-        clearCollisionLog(ghostPlayer->m_collisionLogTop);
-        clearCollisionLog(ghostPlayer->m_collisionLogBottom);
-        clearCollisionLog(ghostPlayer->m_collisionLogLeft);
-        clearCollisionLog(ghostPlayer->m_collisionLogRight);
+        ghostPlayer->m_collisionLogTop->removeAllObjects();
+        ghostPlayer->m_collisionLogBottom->removeAllObjects();
+        ghostPlayer->m_collisionLogLeft->removeAllObjects();
+        ghostPlayer->m_collisionLogRight->removeAllObjects();
         gameLayer->checkCollisions(ghostPlayer, deltaTime, false);
-        static int trafficSamples = 0;
-        if (trafficSamples < 5) {
-            ++trafficSamples;
-            log::info("afterflow: collision traffic {} ghost {} real {} -> {}", trafficSamples, collisionCounts(ghostPlayer), realBefore,
-                hasReal ? collisionCounts(realFirst) : std::string("none"));
-        }
     }
 
     bool isFlying(PlayerObject* playerObject) {
@@ -7863,10 +7108,10 @@ finally {
 
     enum class SimEnd { Ok, StopSearch };
 
-    int runPrediction(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
+    int simulate(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
         int stopAtTick, SimEnd* simulationEnd) {
         *simulationEnd = SimEnd::Ok;
-        if (!state.ghostPlayer1 || !player1) {
+        if (!state.ghostPlayer1) {
             return horizonTicks;
         }
         state.isSimulating = true;
@@ -7890,9 +7135,9 @@ finally {
             state.realRectanglePlayer1 = player1->getObjectRect();
             state.realRectanglePlayer2 = isSecondPlayer ? player2->getObjectRect() : state.realRectanglePlayer1;
         }
-        mirrorStateIntoGhost(state.ghostPlayer1, player1);
+        copyState(state.ghostPlayer1, player1);
         if (isSecondPlayer) {
-            mirrorStateIntoGhost(state.ghostPlayer2, player2);
+            copyState(state.ghostPlayer2, player2);
         }
         state.isHeld1 = state.isHeld2 = state.hasAppliedInput;
         state.isAuto1 = state.isAuto2 = false;
@@ -7900,9 +7145,9 @@ finally {
 
         bool isWaveRun = player1->m_isDart || (isSecondPlayer && player2->m_isDart);
         if (state.waveVersion46Mode && isWaveRun && delayTicks > 0 && !state.skipPressHandling) {
-            applyGhostPress(state.ghostPlayer1, !isDown);
+            pressGhost(state.ghostPlayer1, !isDown);
             if (isSecondPlayer) {
-                applyGhostPress(state.ghostPlayer2, !isDown);
+                pressGhost(state.ghostPlayer2, !isDown);
             }
         }
 
@@ -7942,17 +7187,17 @@ finally {
                 state.autoReleaseTick2 = -2;
             }
             if (currentTick == delayTicks && !state.skipPressHandling) {
-                applyGhostPress(state.ghostPlayer1, isDown);
+                pressGhost(state.ghostPlayer1, isDown);
                 if (isSecondPlayer) {
-                    applyGhostPress(state.ghostPlayer2, isDown);
+                    pressGhost(state.ghostPlayer2, isDown);
                 }
             }
             if (state.retapTick >= 0) {
                 int tick = currentTick - delayTicks - state.retapTick;
                 if (tick == 0 || tick == 1 || tick == 5) {
-                    applyGhostPress(state.ghostPlayer1, tick == 1);
+                    pressGhost(state.ghostPlayer1, tick == 1);
                     if (isSecondPlayer) {
-                        applyGhostPress(state.ghostPlayer2, tick == 1);
+                        pressGhost(state.ghostPlayer2, tick == 1);
                     }
                 }
             }
@@ -7960,9 +7205,9 @@ finally {
                 ++releaseAfterTicks;
             }
             if (releaseAfterTicks >= 0 && currentTick == delayTicks + releaseAfterTicks) {
-                applyGhostPress(state.ghostPlayer1, !isDown);
+                pressGhost(state.ghostPlayer1, !isDown);
                 if (isSecondPlayer) {
-                    applyGhostPress(state.ghostPlayer2, !isDown);
+                    pressGhost(state.ghostPlayer2, !isDown);
                 }
             }
             float stepDeltaTime = currentTick == 0 ? deltaTime * state.firstStepScale : deltaTime;
@@ -8047,7 +7292,7 @@ finally {
         if ((hasDied || state.hasGhostHitPortal) && currentTick < delayTicks) {
             *simulationEnd = SimEnd::StopSearch;
         }
-        reassertObjectStates();
+        restoreObjects();
         state.ghostPlayer1->stopAllActions();
         if (state.ghostPlayer2) {
             state.ghostPlayer2->stopAllActions();
@@ -8056,17 +7301,17 @@ finally {
         return isSafe ? horizonTicks : survivedTicks;
     }
 
-    int predictOrbCandidates(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
+    int simulateOrbs(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
         int stopAtTick, SimEnd* simulationEnd) {
         state.orbClickEnabled = state.assumeOrbHits;
         state.hasTouchedOrb = false;
-        int isFirst = runPrediction(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
+        int isFirst = simulate(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
         if (!state.tryBothOrbCandidates || !state.smartEnabled || !state.hasTouchedOrb || isFirst >= stopAtTick) {
             return isFirst;
         }
         SimEnd firstSimulationEnd = *simulationEnd;
         state.orbClickEnabled = !state.assumeOrbHits;
-        int isSecondPlayer = runPrediction(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
+        int isSecondPlayer = simulate(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
         state.orbClickEnabled = state.assumeOrbHits;
         if (firstSimulationEnd != SimEnd::StopSearch) {
             *simulationEnd = SimEnd::Ok;
@@ -8078,7 +7323,7 @@ finally {
                 state.orbClickEnabled = true;
                 state.orbClickDelayTicks = st(lateTick);
                 SimEnd lateSimulationEnd;
-                int candidateResult = runPrediction(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, &lateSimulationEnd);
+                int candidateResult = simulate(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, &lateSimulationEnd);
                 state.orbClickDelayTicks = 0;
                 state.orbClickEnabled = state.assumeOrbHits;
                 bestResult = std::max(bestResult, candidateResult);
@@ -8094,7 +7339,7 @@ finally {
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - clickStartTime).count();
     }
 
-    int waveHorizonTicks(bool isMini) {
+    int fullWaveHorizon(bool isMini) {
         int waveHorizonTicks = std::clamp(state.waveHorizonTicks, 20, 160);
         return st(isMini ? std::max(20, waveHorizonTicks - 15) : waveHorizonTicks);
     }
@@ -8117,7 +7362,7 @@ finally {
         state.intendedOrbObject = nullptr;
 
         if (learnedDelay > 0 && learnedDelay <= searchWindowTicks) {
-            int learnedResult = runPrediction(gameLayer, player1, player2, isDual, learnedDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+            int learnedResult = simulate(gameLayer, player1, player2, isDual, learnedDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
             if (state.pressOrbRingObject && learnedResult >= horizonTicks) {
                 *landingTick = learnedResult;
                 state.intendedOrbObject = state.pressOrbRingObject;
@@ -8129,12 +7374,12 @@ finally {
         state.probeOrbCandidates.clear();
         state.isProbing = true;
         state.skipPressHandling = true;
-        runPrediction(gameLayer, player1, player2, isDual, 0, true, searchWindowTicks + 2, -1, searchWindowTicks + 2, &simulationEnd);
+        simulate(gameLayer, player1, player2, isDual, 0, true, searchWindowTicks + 2, -1, searchWindowTicks + 2, &simulationEnd);
         state.skipPressHandling = false;
         state.isProbing = false;
         std::string traceText;
 
-        int currentResult = runPrediction(gameLayer, player1, player2, isDual, 0, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+        int currentResult = simulate(gameLayer, player1, player2, isDual, 0, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
         RingObject* currentRing = state.pressOrbRingObject;
         bool currentUsesOrb = currentRing != nullptr;
         int maxDelayTicks = searchWindowTicks + st(4);
@@ -8182,7 +7427,7 @@ finally {
             int timingHigh = std::min(closeTick + st(4), maxDelayTicks);
             int timingBestResult = -1;
             for (int timingDelay = timingLow; timingDelay <= timingHigh; ++timingDelay) {
-                int timingResult = runPrediction(gameLayer, player1, player2, isDual, timingDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+                int timingResult = simulate(gameLayer, player1, player2, isDual, timingDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
                 bool isTimingOrbUsed = state.pressOrbRingObject == currentRing;
                 if (state.explainEnabled) {
                     traceText += fmt::format(" +{}:{}{}", timingDelay, timingResult, isTimingOrbUsed ? "o" : "-");
@@ -8211,7 +7456,7 @@ finally {
             int nearLow = std::max(1, targetCloseTick);
             int nearHigh = std::min(targetCloseTick + st(4), maxDelayTicks);
             for (int nearDelay = nearLow; nearDelay <= nearHigh; ++nearDelay) {
-                int nearResult = runPrediction(gameLayer, player1, player2, isDual, nearDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+                int nearResult = simulate(gameLayer, player1, player2, isDual, nearDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
                 bool isNearOrbUsed = state.pressOrbRingObject == targetProbe->ringObject;
                 if (state.explainEnabled) {
                     traceText += fmt::format(" +{}:{}{}", nearDelay, nearResult, isNearOrbUsed ? "o" : "-");
@@ -8256,7 +7501,7 @@ finally {
 
     int waveScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
+        int candidateResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
         if (candidateResult >= targetTick || *simulationEnd == SimEnd::StopSearch) {
             return candidateResult;
         }
@@ -8267,7 +7512,7 @@ finally {
             }
             int runLengthTicks = std::min(horizonTicks, turnTick + st(WAVE_ESCAPE_TICKS));
             SimEnd turnEndReason;
-            int turnedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
+            int turnedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
             if (turnedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
                     state.baseEscapeTicks = turnTick;
@@ -8281,7 +7526,7 @@ finally {
 
     int robotScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, int horizonTicks, int targetTick, SimEnd* simulationEnd) {
         int usualHoldTicks = robotHoldHistory.pick(st(20), 50);
-        int bestResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, usualHoldTicks, targetTick, simulationEnd);
+        int bestResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, usualHoldTicks, targetTick, simulationEnd);
         robotUsedHoldTicks = usualHoldTicks;
         if (bestResult >= targetTick || *simulationEnd == SimEnd::StopSearch || isQuickScore) {
             return bestResult;
@@ -8291,7 +7536,7 @@ finally {
                 continue;
             }
             SimEnd trialSimulationEnd;
-            int trialResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, st(holdTicks), targetTick, &trialSimulationEnd);
+            int trialResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, st(holdTicks), targetTick, &trialSimulationEnd);
             if (trialResult > bestResult) {
                 bestResult = trialResult;
                 robotUsedHoldTicks = st(holdTicks);
@@ -8305,7 +7550,7 @@ finally {
 
     int spiderScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, int horizonTicks, int releaseAfterTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int baseResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
+        int baseResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
         if (baseResult >= targetTick || *simulationEnd == SimEnd::StopSearch || isQuickScore) {
             return baseResult;
         }
@@ -8317,7 +7562,7 @@ finally {
             int runLengthTicks = std::min(horizonTicks, retapTick + st(16));
             state.retapTick = retapTick;
             SimEnd retapSimulationEnd;
-            int retappedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &retapSimulationEnd);
+            int retappedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &retapSimulationEnd);
             state.retapTick = -1;
             if (retappedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
@@ -8330,7 +7575,7 @@ finally {
         return baseResult;
     }
 
-    bool sameCrashSignature(int candidateDelay, int candidateResult, int baseDelay, int& sameCrashStreak) {
+    bool sameCrash(int candidateDelay, int candidateResult, int baseDelay, int& sameCrashStreak) {
         if (sameCrashStreak >= 0 && std::abs(candidateDelay + candidateResult - baseDelay) <= 1) {
             ++sameCrashStreak;
         }
@@ -8344,7 +7589,7 @@ finally {
         return false;
     }
 
-    int smallestHeldTicks(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
+    int searchSmallest(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
         double budgetMilliseconds = -1.0, bool isQuiet = false, bool needsFullSearch = false) {
         if (budgetMilliseconds < 0.0) {
             budgetMilliseconds = state.budgetMilliseconds;
@@ -8369,7 +7614,7 @@ finally {
                 *landingTick = candidateResult;
                 return candidateDelay;
             }
-            if (sameCrashSignature(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
+            if (sameCrash(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
                 return 0;
             }
             if (std::chrono::duration<double, std::milli>(clock::now() - startTime).count() > budgetMilliseconds) {
@@ -8382,10 +7627,10 @@ finally {
         return 0;
     }
 
-    int twoPassPressSearch(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
+    int searchTwoPass(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
         bool needsFullSearch = false) {
         isQuickScore = true;
-        int candidateDelay = smallestHeldTicks(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, state.budgetMilliseconds * 0.5, true, needsFullSearch);
+        int candidateDelay = searchSmallest(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, state.budgetMilliseconds * 0.5, true, needsFullSearch);
         isQuickScore = false;
         if (candidateDelay > 0) {
             return candidateDelay;
@@ -8396,12 +7641,12 @@ finally {
             say("prediction budget hit (quick pass only)");
             return 0;
         }
-        return smallestHeldTicks(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, remainingBudget, false, needsFullSearch);
+        return searchSmallest(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, remainingBudget, false, needsFullSearch);
     }
 
     int shipScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
+        int candidateResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
         if (candidateResult >= targetTick || *simulationEnd == SimEnd::StopSearch) {
             return candidateResult;
         }
@@ -8412,7 +7657,7 @@ finally {
             }
             int runLengthTicks = std::min(horizonTicks, turnTick + st(WAVE_ESCAPE_TICKS));
             SimEnd turnEndReason;
-            int turnedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
+            int turnedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
             if (turnedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
                     state.baseEscapeTicks = turnTick;
@@ -8426,7 +7671,7 @@ finally {
 
     int ufoScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, int horizonTicks, int releaseAfterTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int baseResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
+        int baseResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
         if (baseResult >= targetTick || *simulationEnd == SimEnd::StopSearch || isQuickScore) {
             return baseResult;
         }
@@ -8438,7 +7683,7 @@ finally {
             int runLengthTicks = std::min(horizonTicks, reflapTick + st(20));
             state.retapTick = reflapTick;
             SimEnd reflapSimulationEnd;
-            int reflappedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &reflapSimulationEnd);
+            int reflappedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &reflapSimulationEnd);
             state.retapTick = -1;
             if (reflappedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
@@ -8451,7 +7696,7 @@ finally {
         return baseResult;
     }
 
-    int wavePressSearch(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, int horizonTicks, int maxDelayTicks, int baseDelay,
+    int searchWave(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, int horizonTicks, int maxDelayTicks, int baseDelay,
         int* landingTick) {
         isMarginUsed = false;
         using clock = std::chrono::steady_clock;
@@ -8489,7 +7734,7 @@ finally {
         return 0;
     }
 
-    int delayPressSearch(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, bool hasWave, int horizonTicks, int maxDelayTicks,
+    int searchDelay(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, bool hasWave, int horizonTicks, int maxDelayTicks,
         int releaseAfterTicks, int baseDelay, int* landingTick, bool needsFullSearch = false) {
         using clock = std::chrono::steady_clock;
         auto startTime = clock::now();
@@ -8505,7 +7750,7 @@ finally {
         int waveBestResult = baseDelay;
         for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
             SimEnd simulationEnd;
-            int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, hasWave ? horizonTicks : targetTick, &simulationEnd);
+            int candidateResult = simulateOrbs(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, hasWave ? horizonTicks : targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
                 debugBestResult = candidateResult;
                 debugBestDelay = candidateDelay;
@@ -8528,16 +7773,16 @@ finally {
                     }
                 }
             }
-            else if (candidateResult < targetTick && sameCrashSignature(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
+            else if (candidateResult < targetTick && sameCrash(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
                 break;
             }
             else if (candidateResult >= targetTick) {
 
                 SimEnd fullSearchEnd;
-                if (candidateResult < horizonTicks && predictOrbCandidates(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &fullSearchEnd) < horizonTicks) {
+                if (candidateResult < horizonTicks && simulateOrbs(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &fullSearchEnd) < horizonTicks) {
                     for (int innerIndex = candidateDelay + 1; innerIndex <= maxDelayTicks && !hasExceededBudget(); ++innerIndex) {
                         SimEnd innerSimulationEnd;
-                        int innerResult = predictOrbCandidates(gameLayer, player1, player2, isDual, innerIndex, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &innerSimulationEnd);
+                        int innerResult = simulateOrbs(gameLayer, player1, player2, isDual, innerIndex, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &innerSimulationEnd);
                         if (innerSimulationEnd == SimEnd::StopSearch) {
                             break;
                         }
@@ -8562,7 +7807,7 @@ finally {
         return 0;
     }
 
-    void stashButtonEvent(int tickCount, bool isDown) {
+    void queueInput(int tickCount, bool isDown) {
         state.queuedInputs.push_back({ tickCount, isDown });
     }
 
@@ -8615,7 +7860,7 @@ finally {
 
         bool hasShip = player1 && (player1->m_isShip || (player2 && player2->m_isShip));
         if (!player1 || player1->m_isDead || (hasShip && !state.shipBufferEnabled)) {
-            clearQueuedPresses();
+            resetPending();
             state.hasAppliedInput = isDown;
             return false;
         }
@@ -8638,12 +7883,6 @@ finally {
         bool hasWave = isPlayer1Wave || (player2 && player2->m_isDart);
         bool isMini = (isPlayer1Wave && player1->m_vehicleSize < 1.f) || (player2 && player2->m_isDart && player2->m_vehicleSize < 1.f);
 
-        if (WAVE_DIRECT_INPUT && hasWave) {
-            clearQueuedPresses();
-            state.hasAppliedInput = isDown;
-            return false;
-        }
-
         int spamGapTicks = st(hasShip && !hasWave ? std::clamp(state.shipSpamGapTicks, 2, 40) : std::clamp(state.spamGapTicks, 4, 40));
         if (state.ticksSinceInput < spamGapTicks) {
             ++state.rapidInputTicks;
@@ -8655,14 +7894,14 @@ finally {
         bool hasUfo = player1->m_isBird || (player2 && player2->m_isBird);
         bool hasBall = player1->m_isBall || (player2 && player2->m_isBall);
         bool hasSwing = player1->m_isSwing || (player2 && player2->m_isSwing);
-        if ((hasShip || (hasUfo && state.ufoSmartEnabled) || (hasBall && state.ballSmartEnabled) || (hasSwing && state.swingSmartEnabled)) &&
+        if ((hasWave || hasShip || (hasUfo && state.ufoSmartEnabled) || (hasBall && state.ballSmartEnabled) || (hasSwing && state.swingSmartEnabled)) &&
             state.rapidInputTicks >= SPAM_STREAK_COUNT) {
             if (!state.queuedInputs.empty()) {
                 for (size_t index = 0; index < state.queuedInputs.size(); ++index) {
                     state.queuedInputs[index].ticksRemaining = static_cast<int>(index);
                 }
                 if (state.queuedInputs.back().isDown != isDown) {
-                    stashButtonEvent(static_cast<int>(state.queuedInputs.size()), isDown);
+                    queueInput(static_cast<int>(state.queuedInputs.size()), isDown);
                 }
                 state.inputShiftTicks = 0;
                 return true;
@@ -8673,7 +7912,7 @@ finally {
 
         if (!state.queuedInputs.empty()) {
             int afterTicks = state.queuedInputs.back().ticksRemaining;
-            stashButtonEvent(std::max(state.inputShiftTicks - earlyTicks, afterTicks), isDown);
+            queueInput(std::max(state.inputShiftTicks - earlyTicks, afterTicks), isDown);
             return true;
         }
 
@@ -8691,7 +7930,7 @@ finally {
                 if (state.releaseShiftTicks > 0) {
                     state.inputShiftTicks = state.releaseShiftTicks;
                     state.releaseShiftTicks = 0;
-                    stashButtonEvent(state.inputShiftTicks, false);
+                    queueInput(state.inputShiftTicks, false);
                     return true;
                 }
                 state.hasAppliedInput = false;
@@ -8706,7 +7945,7 @@ finally {
         }
         int horizonTicks = st(hasFlyer ? 48 : groundHorizon);
         if (hasWave) {
-            horizonTicks = waveHorizonTicks(isMini);
+            horizonTicks = fullWaveHorizon(isMini);
         }
         int const stageDelayTicks = hasWave ? state.ticksWaveMode : (hasShip ? std::clamp(state.shipMaxDelayTicks, 0, 16) : state.ticksAllModes);
         int const modeDelayTicks = hasWave ? 0 : modeTicksAt(activeModeIndex());
@@ -8715,10 +7954,11 @@ finally {
             state.hasAppliedInput = isDown;
             return false;
         }
+
         bool hasAnyRobot = player1->m_isRobot || (player2 && player2->m_isRobot);
         int releaseAfterTicks = -1;
         if (isDown && !hasWave && !hasShip) {
-            releaseAfterTicks = hasAnyRobot ? robotHoldHistory.pick(-1, 50) : estimateHoldTicks();
+            releaseAfterTicks = hasAnyRobot ? robotHoldHistory.pick(-1, 50) : holdEstimate();
         }
 
         bool isGrounded = player1->m_isOnGround && (!player2 || player2->m_isOnGround);
@@ -8728,7 +7968,7 @@ finally {
             if (candidateDelay > 0) {
                 say("orb {} +{}t ({:g}f) -> {}t", state.wasOrbTiming ? "timing" : "press", candidateDelay, candidateDelay * TICK_DURATION, orbLandingTick);
                 state.inputShiftTicks = candidateDelay;
-                stashButtonEvent(candidateDelay - earlyTicks, isDown);
+                queueInput(candidateDelay - earlyTicks, isDown);
                 return true;
             }
         }
@@ -8749,7 +7989,7 @@ finally {
                  : isSpiderPress   ? spiderScore(playLayer, player1, player2, isDual, 0, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd)
                  : isUfoPress      ? ufoScore(playLayer, player1, player2, isDual, 0, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd)
                  : isShipInput     ? shipScore(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, horizonTicks, &simulationEnd)
-                                 : predictOrbCandidates(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+                                 : simulateOrbs(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
 
         std::string tickTagText = midTickFraction > 0.f ? fmt::format(" @{:.2f}", midTickFraction) : std::string();
         if (baseDelay >= horizonTicks) {
@@ -8768,20 +8008,20 @@ finally {
         isCrashFixed = false;
         int neededTicks = (isGroundPress || isRobotPress || isUfoPress) ? horizonTicks : std::min(horizonTicks, baseDelay + st(12));
 
-        savedTick = isCubeStyleWave ? wavePressSearch(playLayer, player1, player2, isDual, isDown, horizonTicks, maxDelayTicks, baseDelay, &landingTick)
-              : isRobotPress    ? twoPassPressSearch(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+        savedTick = isCubeStyleWave ? searchWave(playLayer, player1, player2, isDual, isDown, horizonTicks, maxDelayTicks, baseDelay, &landingTick)
+              : isRobotPress    ? searchTwoPass(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return robotScore(playLayer, player1, player2, isDual, candidateDelay, horizonTicks, targetTick, simulationEnd);
                 }, true)
-              : isSpiderPress   ? twoPassPressSearch(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+              : isSpiderPress   ? searchTwoPass(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return spiderScore(playLayer, player1, player2, isDual, candidateDelay, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
                 })
-              : isShipInput     ? smallestHeldTicks(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+              : isShipInput     ? searchSmallest(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return shipScore(playLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, targetTick, simulationEnd);
                 })
-              : isUfoPress      ? twoPassPressSearch(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+              : isUfoPress      ? searchTwoPass(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return ufoScore(playLayer, player1, player2, isDual, candidateDelay, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
                 }, true)
-                              : delayPressSearch(playLayer, player1, player2, isDual, isDown, hasWave, horizonTicks, maxDelayTicks, releaseAfterTicks, baseDelay, &landingTick,
+                              : searchDelay(playLayer, player1, player2, isDual, isDown, hasWave, horizonTicks, maxDelayTicks, releaseAfterTicks, baseDelay, &landingTick,
                                     isGroundPress);
 
         if (savedTick <= 0) {
@@ -8796,7 +8036,7 @@ finally {
             int verificationHorizonTicks = st(8);
             state.retapTick = -1;
             state.orbClickEnabled = false;
-            runPrediction(playLayer, player1, player2, isDual, savedTick, isDown, verificationHorizonTicks, -1, verificationHorizonTicks, &verificationEnd);
+            simulate(playLayer, player1, player2, isDual, savedTick, isDown, verificationHorizonTicks, -1, verificationHorizonTicks, &verificationEnd);
             if (state.pressOrbRingObject != state.intendedOrbObject) {
                 if (state.explainEnabled) {
                     say("orb save +{}t rejected: press would use {}, not the clicked orb", savedTick,
@@ -8814,7 +8054,7 @@ finally {
             isCubeStyleWave && isMarginUsed ? std::string("  +margin")
             : isRobotPress ? fmt::format("  hold {}t", robotUsedHoldTicks) : std::string());
         state.inputShiftTicks = savedTick;
-        stashButtonEvent(savedTick - earlyTicks, isDown);
+        queueInput(savedTick - earlyTicks, isDown);
         return true;
     }
 
@@ -8823,10 +8063,10 @@ finally {
         bool didChange = nextIndex != state.stageIndex;
         state.stageIndex = nextIndex;
         Mod::get()->setSavedValue("stage", state.stageIndex);
-        clearQueuedPresses();
+        resetPending();
         auto* gameLayer = GameManager::get()->m_playLayer;
         if (gameLayer && !state.wasAutoReleased && state.hasAppliedInput != state.hasRealInput) {
-            forwardPressToGame(gameLayer, state.hasRealInput);
+            sendButton(gameLayer, state.hasRealInput);
         }
         applyStage();
         refreshAfterflowOverlay();
@@ -8840,35 +8080,6 @@ finally {
         setStageIndex(previousIndex + stageDirection);
         if (state.stageIndex != previousIndex) {
             say("{} cycle -> {}", stageKey(), stageBanner());
-        }
-    }
-
-    void jumpToStage(int stageIndex) {
-        if (stageIndex < 0 || stageIndex >= stageTotalCount()) {
-            return;
-        }
-        if (stageIndex == state.stageIndex) {
-            return;
-        }
-        setStageIndex(stageIndex);
-        say("{} -> {}", stageKeyText(stageIndex), stageBanner());
-    }
-
-    void setupStageKeybinds() {
-        if (isMobileHost()) {
-            return;
-        }
-        for (int index = 0; index < STAGE_TABLE_SIZE + CUSTOM_STAGE_LIMIT; ++index) {
-            auto setting = stageKeySetting(index);
-            if (setting.empty()) {
-                continue;
-            }
-            listenForKeybindSettingPresses(setting, [index](Keybind const&, bool isDown, bool isRepeat, double) {
-                if (isDown && !isRepeat) {
-                    jumpToStage(index);
-                }
-                return true;
-            });
         }
     }
 
@@ -8896,7 +8107,7 @@ finally {
         }
     }
 
-void flushHeldPress(PlayLayer* gameLayer, PlayerObject* playerObject) {
+    void deliverPending(PlayLayer* gameLayer, PlayerObject* playerObject) {
         if (gameLayer->m_isPaused) {
             return;
         }
@@ -8906,18 +8117,18 @@ void flushHeldPress(PlayLayer* gameLayer, PlayerObject* playerObject) {
         bool isTwoPlayer = gameLayer->m_level && gameLayer->m_level->m_twoPlayerMode;
         bool isDual = !isTwoPlayer && gameLayer->m_gameState.m_isDualMode && gameLayer->m_player2;
         if (!state.shipBufferEnabled && (playerObject->m_isShip || (isDual && gameLayer->m_player2->m_isShip))) {
-            clearQueuedPresses();
+            resetPending();
             if (state.hasAppliedInput != state.hasRealInput) {
-                forwardPressToGame(gameLayer, state.hasRealInput);
+                sendButton(gameLayer, state.hasRealInput);
             }
             return;
         }
 
         if (state.queuedInputs.empty()) {
             if (state.hasAppliedInput != state.hasRealInput) {
-                forwardPressToGame(gameLayer, state.hasRealInput);
+                sendButton(gameLayer, state.hasRealInput);
             }
-            clearGhostScenery();
+            sweepGhostLayer();
             return;
         }
 
@@ -8926,7 +8137,7 @@ void flushHeldPress(PlayLayer* gameLayer, PlayerObject* playerObject) {
             state.queuedInputs.pop_front();
             state.releaseShiftTicks = isDown ? state.inputShiftTicks : 0;
             if (isDown != state.hasAppliedInput) {
-                forwardPressToGame(gameLayer, isDown);
+                sendButton(gameLayer, isDown);
             }
         }
         for (auto& queuedInput : state.queuedInputs) {
@@ -8938,152 +8149,9 @@ void flushHeldPress(PlayLayer* gameLayer, PlayerObject* playerObject) {
     }
 }
 
-#define AFTERFLOW_PHASE(name)                       \
-    do {                                            \
-        static bool phaseShown = false;             \
-        if (!phaseShown) {                          \
-            phaseShown = true;                      \
-            log::info("afterflow: {}", name);       \
-        }                                           \
-    } while (false)
-
-#ifdef GEODE_IS_WINDOWS
-namespace {
-    std::filesystem::path crashGameDirectory() {
-        wchar_t path[MAX_PATH] = {};
-        GetModuleFileNameW(nullptr, path, MAX_PATH);
-        return std::filesystem::path(path).parent_path();
-    }
-
-    std::string crashFrameName(void* address, uintptr_t& offset) {
-        HMODULE module = nullptr;
-        offset = 0;
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCWSTR>(address), &module) || !module) {
-            return "unknown";
-        }
-        wchar_t path[MAX_PATH] = {};
-        GetModuleFileNameW(module, path, MAX_PATH);
-        offset = reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module);
-        return std::filesystem::path(path).filename().string();
-    }
-
-    void addCrashCandidate(std::vector<uintptr_t>& candidates, uintptr_t value) {
-        if (value < 0x10000 || value > 0x7FFFFFFFFFFF) {
-            return;
-        }
-        if (value % 8 != 0) {
-            return;
-        }
-        for (uintptr_t existing : candidates) {
-            if (existing == value) {
-                return;
-            }
-        }
-        candidates.push_back(value);
-    }
-
-    std::string crashSuspects(EXCEPTION_POINTERS* info) {
-        auto* context = info->ContextRecord;
-        std::vector<uintptr_t> candidates;
-        for (uintptr_t value : { static_cast<uintptr_t>(context->Rcx), static_cast<uintptr_t>(context->Rdx),
-                 static_cast<uintptr_t>(context->R8), static_cast<uintptr_t>(context->R9),
-                 static_cast<uintptr_t>(context->Rbx), static_cast<uintptr_t>(context->Rbp),
-                 static_cast<uintptr_t>(context->Rsi), static_cast<uintptr_t>(context->Rdi) }) {
-            addCrashCandidate(candidates, value);
-        }
-        uintptr_t stackWords[128] = {};
-        if (ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(static_cast<uintptr_t>(context->Rsp)),
-                stackWords, sizeof(stackWords), nullptr)) {
-            for (uintptr_t word : stackWords) {
-                addCrashCandidate(candidates, word);
-            }
-        }
-        std::string text = "suspect objects\n";
-        int reported = 0;
-        for (uintptr_t candidate : candidates) {
-            if (reported >= 24) {
-                break;
-            }
-            void* vtable = nullptr;
-            if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(candidate), &vtable, sizeof(vtable), nullptr) || !vtable) {
-                continue;
-            }
-            uintptr_t offset = 0;
-            std::string name = crashFrameName(vtable, offset);
-            if (name == "unknown") {
-                continue;
-            }
-            text += fmt::format("  {} {}+0x{:X}", reinterpret_cast<void*>(candidate), name, offset);
-            if (name == "GeometryDash.exe") {
-                auto* gameObject = reinterpret_cast<GameObject*>(candidate);
-                text += fmt::format(" objectid {} type {} activated {}", gameObject->m_objectID,
-                    static_cast<int>(gameObject->m_objectType), gameObject->m_isActivated ? 1 : 0);
-            }
-            text += "\n";
-            ++reported;
-        }
-        if (auto* gameLayer = PlayLayer::get()) {
-            PlayerObject* players[2] = { gameLayer->m_player1, gameLayer->m_player2 };
-            for (PlayerObject* player : players) {
-                if (!player) {
-                    continue;
-                }
-                text += fmt::format("  log {} {}\n", static_cast<void*>(player), collisionCounts(player));
-            }
-        }
-        return text;
-    }
-
-    LONG WINAPI afterflowCrashHandler(EXCEPTION_POINTERS* info) {
-        DWORD const code = info->ExceptionRecord->ExceptionCode;
-        if (code != 0xC0000374 && code != 0xC0000005) {
-            return EXCEPTION_CONTINUE_SEARCH;
-        }
-        static bool isWriting = false;
-        if (isWriting) {
-            return EXCEPTION_CONTINUE_SEARCH;
-        }
-        isWriting = true;
-        std::string text = fmt::format("afterflow crash report\nexception 0x{:08X}\naddress 0x{:016X}\n\n", code,
-            reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
-        void* frames[48] = {};
-        USHORT const frameCount = CaptureStackBackTrace(0, 48, frames, nullptr);
-        for (USHORT index = 0; index < frameCount; ++index) {
-            uintptr_t offset = 0;
-            std::string name = crashFrameName(frames[index], offset);
-            text += fmt::format("  {}+0x{:X}\n", name, offset);
-        }
-        text += crashSuspects(info);
-        std::error_code errorCode;
-        std::filesystem::path directory = crashGameDirectory() / "geode" / "crashlogs";
-        std::filesystem::create_directories(directory, errorCode);
-        auto stamp = std::time(nullptr);
-        std::tm local = {};
-        localtime_s(&local, &stamp);
-        char fileName[64] = {};
-        std::strftime(fileName, sizeof(fileName), "afterflow %Y-%m-%d %H.%M.%S.log", &local);
-        std::filesystem::path filePath = directory / fileName;
-        std::ofstream file(filePath);
-        if (file.is_open()) {
-            file << text;
-            file.close();
-        }
-        log::error("{}saved to {}", text, filePath.string());
-        MessageBoxA(nullptr, fmt::format("{}\nsaved to {}", text, filePath.string()).c_str(), "afterflow crash", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-}
-
-$on_mod(Loaded) {
-    AddVectoredExceptionHandler(1, afterflowCrashHandler);
-}
-#endif
-
 $on_mod(Loaded) {
 
     log::info("afterflow: load start ({})", hostOSName());
-    log::info("afterflow: version {}", Mod::get()->getVersion().toVString());
 
     constexpr int STAGE_SCHEMA_VERSION = 2;
     int savedStageIndex = std::clamp(Mod::get()->getSavedValue<int>("stage", 0), 0, stageTotalCount() - 1);
@@ -9097,15 +8165,12 @@ $on_mod(Loaded) {
     state.stageIndex = savedStageIndex;
     readSettings();
     applyStage();
-    AFTERFLOW_PHASE("settings applied");
     removeLegacyTerminalLogs();
     resetTerminalLog();
     if (!isMobileHost()) {
         startCycleWatcher();
     }
     setupKeybinds();
-    setupStageKeybinds();
-    AFTERFLOW_PHASE("keybinds ready");
     static auto sceneListener = SceneEvent().listen([](CCScene* scene) {
         attachAfterflowOverlay(scene);
     });
@@ -9140,7 +8205,6 @@ $on_mod(Loaded) {
     (void)secondaryColorListener;
     (void)panelScaleListener;
     (void)fontScaleListener;
-    AFTERFLOW_PHASE("listeners ready");
     say("starting mode: {}", stageBanner());
     say("{} cycles anywhere: 2/2 -> 4/4 -> 8/8 -> 16/8 -> 24/12 -> 32/16 -> 40/20 -> off", stageKey());
     if (isMobileHost()) {
@@ -9159,19 +8223,11 @@ class $modify(BufPlayLayer, PlayLayer) {
         (void)self.setHookPriority("PlayLayer::playEndAnimationToPos", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("PlayLayer::pauseGame", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("PlayLayer::resume", MOD_HOOK_PRIORITY);
-        (void)self.setHookPriority("PlayLayer::spawnCircle", MOD_HOOK_PRIORITY);
-    }
-
-    void spawnCircle() {
-        if (state.isSimulating) {
-            return;
-        }
-        PlayLayer::spawnCircle();
     }
 
     void destroyPlayer(PlayerObject* playerObject, GameObject* gameObject) {
 
-        if (state.isSimulating || isSimulatedGhost(playerObject)) {
+        if (state.isSimulating || isGhost(playerObject)) {
             if (state.isSimulating) {
                 state.hasGhostDied = true;
             }
@@ -9182,31 +8238,23 @@ class $modify(BufPlayLayer, PlayLayer) {
         if (!playerObject || wasAlreadyDead || !playerObject->m_isDead) {
             return;
         }
-        clearQueuedPresses();
+        resetPending();
         state.hasAppliedInput = false;
         state.rapidInputTicks = 0;
-        dropHeldPress();
+        forgetPress();
     }
 
     bool init(GJGameLevel* gameLevel, bool useReplayData, bool skipObjectCreation) {
         if (!PlayLayer::init(gameLevel, useReplayData, skipObjectCreation)) {
             return false;
         }
-        retireGhostPlayers();
+        dropGhosts();
         readSettings();
         applyStage();
-        auto* ghostA = createGhostPlayer(this);
-        auto* ghostB = createGhostPlayer(this);
-        if (!ghostA || !ghostB || !state.ghostRenderLayer) {
-            retireGhostPlayers();
-            log::warn("afterflow: could not create buffer players, buffering disabled for this level");
-        }
-        else {
-            state.ghostPlayer1 = ghostA;
-            state.ghostPlayer2 = ghostB;
-            state.ghostLayerBaseIndex = state.ghostRenderLayer->getChildrenCount();
-            say("buffer ready | {} | {} cycles", stageText(), stageKey());
-        }
+        state.ghostPlayer1 = makeGhost(this);
+        state.ghostPlayer2 = makeGhost(this);
+        state.ghostLayerBaseIndex = state.ghostRenderLayer->getChildrenCount();
+        say("buffer ready | {} | {} cycles", stageText(), stageKey());
         checkForUpdates(false);
         state.hasRealInput = false;
         state.hasAppliedInput = false;
@@ -9214,49 +8262,43 @@ class $modify(BufPlayLayer, PlayLayer) {
         state.ticksSinceInput = 999;
         state.rapidInputTicks = 0;
         state.wasAutoReleased = false;
-        dropHeldPress();
-        clearQueuedPresses();
+        forgetPress();
+        resetPending();
         scheduleAfterflowOverlay(this);
         return true;
     }
 
     void onQuit() {
-        clearQueuedPresses();
-        retireGhostPlayers();
+        resetPending();
+        dropGhosts();
         PlayLayer::onQuit();
     }
 
-    void onExit() {
-        clearQueuedPresses();
-        retireGhostPlayers();
-        PlayLayer::onExit();
-    }
-
     void resetLevel() {
-        clearQueuedPresses();
-        dropHeldPress();
+        resetPending();
+        forgetPress();
         state.hasAppliedInput = false;
         state.wasAutoReleased = false;
         PlayLayer::resetLevel();
     }
 
     void pauseGame(bool isUnfocused) {
-        clearQueuedPresses();
+        resetPending();
         state.rapidInputTicks = 0;
         state.ticksSinceInput = 999;
         state.wasAutoReleased = false;
-        dropHeldPress();
-        clearGhostScenery();
+        forgetPress();
+        sweepGhostLayer();
         PlayLayer::pauseGame(isUnfocused);
     }
 
     void resume() {
-        clearQueuedPresses();
+        resetPending();
         state.rapidInputTicks = 0;
         state.ticksSinceInput = 999;
         state.wasAutoReleased = false;
-        dropHeldPress();
-        clearGhostScenery();
+        forgetPress();
+        sweepGhostLayer();
         PlayLayer::resume();
     }
 
@@ -9385,7 +8427,7 @@ public:
         if (deltaX * deltaX + deltaY * deltaY > reach * reach) {
             return false;
         }
-        m_dragActive = true;
+        m_dragging = true;
         m_moved = false;
         m_dragStart = local;
         m_dragOffset = CCPoint(m_home.x - local.x, m_home.y - local.y);
@@ -9395,7 +8437,7 @@ public:
     }
 
     void ccTouchMoved(CCTouch* touch, CCEvent*) override {
-        if (!m_dragActive || !m_face || !touch) {
+        if (!m_dragging || !m_face || !touch) {
             return;
         }
         CCPoint local = convertTouchToNodeSpace(touch);
@@ -9413,10 +8455,10 @@ public:
     }
 
     void ccTouchEnded(CCTouch* touch, CCEvent*) override {
-        if (!m_dragActive) {
+        if (!m_dragging) {
             return;
         }
-        m_dragActive = false;
+        m_dragging = false;
         if (m_face) {
             m_face->stopAllActions();
             m_face->runAction(CCScaleTo::create(0.1f, 1.f));
@@ -9426,13 +8468,14 @@ public:
             savePosition();
             return;
         }
+
         Loader::get()->queueInMainThread([] {
             toggleAfterflowPanel();
         });
     }
 
     void ccTouchCancelled(CCTouch*, CCEvent*) override {
-        m_dragActive = false;
+        m_dragging = false;
         m_moved = false;
         if (m_face) {
             m_face->stopAllActions();
@@ -9513,7 +8556,7 @@ private:
     CCPoint m_home;
     CCPoint m_dragStart;
     CCPoint m_dragOffset;
-    bool m_dragActive = false;
+    bool m_dragging = false;
     bool m_moved = false;
     CCNode* m_face = nullptr;
 };
@@ -9572,11 +8615,11 @@ class $modify(BufMenuLayer, MenuLayer) {
         if (!MenuLayer::init()) {
             return false;
         }
-        AFTERFLOW_PHASE("menu init");
 
         this->runAction(CCSequence::create(
             CCDelayTime::create(0.2f),
             CallFuncExt::create([] {
+
                 log::info("afterflow: menu ready");
                 checkForUpdates(true);
                 if (!showUpdatePopup()) {
@@ -9586,7 +8629,6 @@ class $modify(BufMenuLayer, MenuLayer) {
             nullptr
         ));
         scheduleAfterflowOverlay(this);
-        AFTERFLOW_PHASE("menu scheduled");
         return true;
     }
 };
@@ -9594,7 +8636,7 @@ class $modify(BufMenuLayer, MenuLayer) {
 class $modify(BufEditorLayer, LevelEditorLayer) {
     bool init(GJGameLevel* gameLevel, bool withoutUI) {
         bool isSuccess = LevelEditorLayer::init(gameLevel, withoutUI);
-        retireGhostPlayers();
+        dropGhosts();
         scheduleAfterflowOverlay(this);
         return isSuccess;
     }
@@ -9616,8 +8658,6 @@ class $modify(BufHardStreak, HardStreak) {
 class $modify(BufEffectGameObject, EffectGameObject) {
     static void onModify(auto& self) {
         (void)self.setHookPriority("EffectGameObject::triggerObject", MOD_HOOK_PRIORITY);
-        (void)self.setHookPriority("EffectGameObject::playTriggerEffect", MOD_HOOK_PRIORITY);
-        (void)self.setHookPriority("EffectGameObject::animationTriggered", MOD_HOOK_PRIORITY);
     }
 
     void triggerObject(GJBaseGameLayer* gameLayer, int uniqueId, gd::vector<int> const* remapKeyVector) {
@@ -9625,20 +8665,6 @@ class $modify(BufEffectGameObject, EffectGameObject) {
             return;
         }
         EffectGameObject::triggerObject(gameLayer, uniqueId, remapKeyVector);
-    }
-
-    void playTriggerEffect() {
-        if (state.isSimulating) {
-            return;
-        }
-        EffectGameObject::playTriggerEffect();
-    }
-
-    void animationTriggered() {
-        if (state.isSimulating) {
-            return;
-        }
-        EffectGameObject::animationTriggered();
     }
 };
 
@@ -9658,15 +8684,6 @@ class $modify(BufGameObject, GameObject) {
 class $modify(BufRingObject, RingObject) {
     static void onModify(auto& self) {
         (void)self.setHookPriority("RingObject::spawnCircle", MOD_HOOK_PRIORITY);
-        (void)self.setHookPriority("RingObject::powerOnObject", MOD_HOOK_PRIORITY);
-        (void)self.setHookPriority("RingObject::triggerActivated", MOD_HOOK_PRIORITY);
-    }
-
-    void triggerActivated(float xPosition) {
-        if (state.isSimulating) {
-            return;
-        }
-        RingObject::triggerActivated(xPosition);
     }
 
     void spawnCircle() {
@@ -9674,27 +8691,6 @@ class $modify(BufRingObject, RingObject) {
             return;
         }
         RingObject::spawnCircle();
-    }
-
-    void powerOnObject(int activationState) {
-        if (state.isSimulating) {
-            return;
-        }
-        RingObject::powerOnObject(activationState);
-    }
-};
-
-class $modify(BufDictionary, cocos2d::CCDictionary) {
-    static void onModify(auto& self) {
-        (void)self.setHookPriority("cocos2d::CCDictionary::removeAllObjects", MOD_HOOK_PRIORITY);
-    }
-
-    void removeAllObjects() {
-        if (!state.isSimulating && this->count() > 0) {
-            std::string logName = playerLogLabel(this);
-            pruneDictionaryEntries(this, logName, !logName.empty());
-        }
-        cocos2d::CCDictionary::removeAllObjects();
     }
 };
 
@@ -9718,8 +8714,7 @@ class $modify(BufPlayerObject, PlayerObject) {
         if (gameLayer && this == gameLayer->m_player1 && !gameLayer->m_isPaused) {
             ++currentTick;
             if (state.isEnabled) {
-
-                flushHeldPress(gameLayer, this);
+                deliverPending(gameLayer, this);
             }
         }
 
@@ -9750,70 +8745,68 @@ class $modify(BufPlayerObject, PlayerObject) {
         PlayerObject::incrementJumps();
     }
 
-    bool ghostFxNode() {
-        return state.isSimulating && isSimulatedGhost(this);
+    bool ghostEffect() {
+        return state.isSimulating && isGhost(this);
     }
 
     void spawnCircle() {
-        if (!ghostFxNode()) PlayerObject::spawnCircle();
+        if (!ghostEffect()) PlayerObject::spawnCircle();
     }
 
     void spawnDualCircle() {
-        if (!ghostFxNode()) PlayerObject::spawnDualCircle();
+        if (!ghostEffect()) PlayerObject::spawnDualCircle();
     }
 
     void spawnPortalCircle(ccColor3B portalColor, float initialRadius) {
-        if (!ghostFxNode()) PlayerObject::spawnPortalCircle(portalColor, initialRadius);
+        if (!ghostEffect()) PlayerObject::spawnPortalCircle(portalColor, initialRadius);
     }
 
     void spawnScaleCircle() {
-        if (!ghostFxNode()) PlayerObject::spawnScaleCircle();
+        if (!ghostEffect()) PlayerObject::spawnScaleCircle();
     }
 
     void playBumpEffect(int gameObjectType, GameObject* gameObject) {
-        if (!ghostFxNode()) PlayerObject::playBumpEffect(gameObjectType, gameObject);
+        if (!ghostEffect()) PlayerObject::playBumpEffect(gameObjectType, gameObject);
     }
 
-#ifndef GEODE_IS_IOS
     void playSpawnEffect() {
-        if (!ghostFxNode()) PlayerObject::playSpawnEffect();
+        if (!ghostEffect()) PlayerObject::playSpawnEffect();
     }
 
     void createFadeOutDartStreak() {
-        if (!ghostFxNode()) PlayerObject::createFadeOutDartStreak();
+        if (!ghostEffect()) PlayerObject::createFadeOutDartStreak();
     }
 
     void fadeOutStreak2(float fadeDuration) {
-        if (!ghostFxNode()) PlayerObject::fadeOutStreak2(fadeDuration);
+        if (!ghostEffect()) PlayerObject::fadeOutStreak2(fadeDuration);
     }
 
     void playDynamicSpiderRun() {
-        if (!ghostFxNode()) PlayerObject::playDynamicSpiderRun();
+        if (!ghostEffect()) PlayerObject::playDynamicSpiderRun();
     }
 
     void animatePlatformerJump(float jumpScale) {
-        if (!ghostFxNode()) PlayerObject::animatePlatformerJump(jumpScale);
+        if (!ghostEffect()) PlayerObject::animatePlatformerJump(jumpScale);
     }
 
     void runBallRotation(float speedValue) {
-        if (!ghostFxNode()) PlayerObject::runBallRotation(speedValue);
+        if (!ghostEffect()) PlayerObject::runBallRotation(speedValue);
     }
 
     void runBallRotation2() {
-        if (!ghostFxNode()) PlayerObject::runBallRotation2();
+        if (!ghostEffect()) PlayerObject::runBallRotation2();
     }
 
     void runNormalRotation(bool isNotNormalMode, float speedValue) {
-        if (!ghostFxNode()) PlayerObject::runNormalRotation(isNotNormalMode, speedValue);
+        if (!ghostEffect()) PlayerObject::runNormalRotation(isNotNormalMode, speedValue);
     }
-#endif
 
     void toggleGhostEffect(GhostType ghostType) {
-        if (!ghostFxNode()) PlayerObject::toggleGhostEffect(ghostType);
+        if (!ghostEffect()) PlayerObject::toggleGhostEffect(ghostType);
     }
 
     void activateStreak() {
-        if (!ghostFxNode()) PlayerObject::activateStreak();
+        if (!ghostEffect()) PlayerObject::activateStreak();
     }
 
     void playSpiderDashEffect(CCPoint fromPoint, CCPoint toPoint) {
@@ -9824,14 +8817,14 @@ class $modify(BufPlayerObject, PlayerObject) {
     }
 
     void playDeathEffect() {
-        if (state.isSimulating || isSimulatedGhost(this)) {
+        if (state.isSimulating || isGhost(this)) {
             return;
         }
         PlayerObject::playDeathEffect();
     }
 
     void playerDestroyed(bool suppressEffects) {
-        if (state.isSimulating || isSimulatedGhost(this)) {
+        if (state.isSimulating || isGhost(this)) {
             if (state.isSimulating) {
                 state.hasGhostDied = true;
             }
@@ -9841,18 +8834,18 @@ class $modify(BufPlayerObject, PlayerObject) {
     }
 
     void playCompleteEffect(bool suppressEffects, bool isInstant) {
-        if (!ghostFxNode()) PlayerObject::playCompleteEffect(suppressEffects, isInstant);
+        if (!ghostEffect()) PlayerObject::playCompleteEffect(suppressEffects, isInstant);
     }
 
     void ringJump(RingObject* ringObject, bool skipCollisionCheck) {
         if (state.isSimulating) {
-            if (!state.smartEnabled || !isSimulatedGhost(this)) {
+            if (!state.smartEnabled || !isGhost(this)) {
                 return;
             }
             if (state.usedOrbs.contains(ringObject)) {
                 return;
             }
-            rememberObjectState(ringObject);
+            snapshotObject(ringObject);
 
             double verticalVelocity = m_yVelocity;
             bool isUpsideDown = m_isUpsideDown;
@@ -9874,7 +8867,7 @@ class $modify(BufPlayerObject, PlayerObject) {
     }
 
     void startDashing(DashRingObject* dashRing) {
-        if (state.isSimulating && isSimulatedGhost(this)) {
+        if (state.isSimulating && isGhost(this)) {
             state.usedOrbs.insert(dashRing);
             if (state.orbUseTick < 0) {
                 state.orbUseTick = state.simulationTick;
@@ -9896,38 +8889,11 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         (void)self.setHookPriority("GJBaseGameLayer::flipGravity", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("GJBaseGameLayer::gameEventTriggered", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("GJBaseGameLayer::playerWillSwitchMode", MOD_HOOK_PRIORITY);
-        (void)self.setHookPriority("GJBaseGameLayer::update", MOD_HOOK_PRIORITY);
-    }
-
-    static void ensureLiveGroundPointer(PlayerObject* trackedPlayer) {
-        if (!trackedPlayer) {
-            return;
-        }
-        if (!isDeadCocosObject(trackedPlayer->m_maybeLastGroundObject)) {
-            return;
-        }
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            log::warn("afterflow: player ground pointer {} was freed, pointing it at the player before GD logs it",
-                static_cast<void*>(trackedPlayer->m_maybeLastGroundObject));
-        }
-        trackedPlayer->m_maybeLastGroundObject = trackedPlayer;
-    }
-
-    void update(float deltaTime) {
-        if (!state.isSimulating) {
-            g_trackedGround1 = this->m_player1;
-            g_trackedGround2 = this->m_player2;
-            ensureLiveGroundPointer(this->m_player1);
-            ensureLiveGroundPointer(this->m_player2);
-        }
-        GJBaseGameLayer::update(deltaTime);
     }
 
     bool canBeActivatedByPlayer(PlayerObject* playerObject, EffectGameObject* effectObject) {
         if (state.isSimulating) {
-            if (!state.smartEnabled || !isSimulatedGhost(playerObject) || !effectObject) {
+            if (!state.smartEnabled || !isGhost(playerObject) || !effectObject) {
                 return false;
             }
 
@@ -9935,10 +8901,14 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
                 if (state.usedOrbs.contains(effectObject)) {
                     return false;
                 }
-                rememberObjectState(effectObject);
+                snapshotObject(effectObject);
                 return true;
             }
-            return false;
+            if (state.simulationUsedObjects.contains(effectObject)) {
+                return false;
+            }
+            snapshotObject(effectObject);
+            return true;
         }
         return GJBaseGameLayer::canBeActivatedByPlayer(playerObject, effectObject);
     }
@@ -10019,17 +8989,9 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
     void handleButton(bool isDown, int buttonId, bool isFirstPlayer) {
         if (!state.isSimulating && buttonId == 1 && !state.isInjecting) {
             auto* player1 = this->m_player1;
-            if (WAVE_DIRECT_INPUT && player1 && player1->m_isDart) {
-
-                clearQueuedPresses();
-                state.hasRealInput = isDown;
-                state.hasAppliedInput = isDown;
-                GJBaseGameLayer::handleButton(isDown, buttonId, isFirstPlayer);
-                return;
-            }
-            logRealInputPress(isDown, player1);
+            recordRealInput(isDown, player1);
             bool isHeld = intercept(this, isDown, isFirstPlayer);
-            clearGhostScenery();
+            sweepGhostLayer();
             if (isHeld) {
                 return;
             }
@@ -10039,10 +9001,10 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
 
     void playerTouchedRing(PlayerObject* playerObject, RingObject* ringObject) {
         if (state.isSimulating) {
-            if (!state.smartEnabled || !isSimulatedGhost(playerObject)) {
+            if (!state.smartEnabled || !isGhost(playerObject)) {
                 return;
             }
-            rememberObjectState(ringObject);
+            snapshotObject(ringObject);
             state.hasTouchedOrb = true;
             if (state.firstOrbTouchTick < 0) {
                 state.firstOrbTouchTick = state.simulationTick;
@@ -10074,9 +9036,7 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
                 }
             }
         }
-        if (!state.isSimulating) {
-            GJBaseGameLayer::playerTouchedRing(playerObject, ringObject);
-        }
+        GJBaseGameLayer::playerTouchedRing(playerObject, ringObject);
 
         if (state.isSimulating && state.orbClickEnabled) {
             if (typeinfo_cast<DashRingObject*>(ringObject)) {
@@ -10100,7 +9060,7 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
 
     void flipGravity(PlayerObject* playerObject, bool shouldFlip, bool suppressEffects) {
         if (state.isSimulating) {
-            if (state.smartEnabled && isSimulatedGhost(playerObject)) {
+            if (state.smartEnabled && isGhost(playerObject)) {
                 playerObject->flipGravity(shouldFlip, true);
             }
             return;
@@ -10113,13 +9073,6 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
             return;
         }
         GJBaseGameLayer::gameEventTriggered(gameEvent, materialId, playerId);
-    }
-
-    void playerTouchedTrigger(PlayerObject* playerObject, EffectGameObject* effectObject) {
-        if (state.isSimulating) {
-            return;
-        }
-        GJBaseGameLayer::playerTouchedTrigger(playerObject, effectObject);
     }
 
     void toggleGroupTriggered(int groupId, bool shouldActivate, gd::vector<int> const& remapKeyVector, int triggerId, int controlId) {
