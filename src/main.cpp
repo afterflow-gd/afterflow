@@ -151,7 +151,7 @@ namespace {
     constexpr int CUSTOM_TICKS_MIN = 1;
     constexpr int CUSTOM_TICKS_MAX = 240;
     constexpr int MODE_TICKS_MAX = 240;
-    constexpr bool WAVE_DIRECT_INPUT = true;
+    constexpr bool WAVE_DIRECT_INPUT = false;
     constexpr int MODE_TICK_COUNT = 8;
     constexpr char const* MODE_TICK_NAMES[MODE_TICK_COUNT] = {
         "cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing"
@@ -369,7 +369,7 @@ namespace {
         CCLayer* ghostRenderLayer = nullptr;
         unsigned ghostLayerBaseIndex = 0;
         bool performanceMode = false;
-        double userBudgetMilliseconds = 2.0;
+        double userBudgetMilliseconds = 3.0;
         bool automaticBudget = true;
         int keyStates[6] = { 0, 0, 0, 0, 0, 0 };
         std::unordered_set<GameObject*> simulationDisabledObjects;
@@ -2360,7 +2360,7 @@ finally {
         state.waveMarginEnabled = true;
         state.orbWindowTicks = 6;
         state.performanceMode = false;
-        state.userBudgetMilliseconds = 2.0;
+        state.userBudgetMilliseconds = 3.0;
         state.wasAutoReleased = false;
         state.consoleEnabled = false;
         state.showPathEnabled = false;
@@ -2370,7 +2370,7 @@ finally {
         // one click may never spend more than a slice of a frame, the old code scaled the budget by
         // stepScale, which turned 8 ms into 24 ms at 60fps, one and a half frames spent simulating on
         // every click, that stall is what made buffered input feel late and mushy
-        double budgetMilliseconds = std::clamp(state.userBudgetMilliseconds, 0.5, 3.0);
+        double budgetMilliseconds = std::clamp(state.userBudgetMilliseconds, 0.5, 4.0);
         if (state.automaticBudget) {
             auto* cocosDirector = CCDirector::get();
             double frameInterval = cocosDirector->getAnimationInterval() * 1000.0;
