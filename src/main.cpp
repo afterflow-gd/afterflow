@@ -10143,6 +10143,15 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
     void handleButton(bool isDown, int buttonId, bool isFirstPlayer) {
         if (!state.isSimulating && buttonId == 1 && !state.isInjecting) {
             auto* player1 = this->m_player1;
+            if (WAVE_DIRECT_INPUT && player1 && player1->m_isDart) {
+                // wave is read click by click, so the click is forwarded before any buffer work runs, no
+                // prediction, no scenery sweep, no queue, nothing that could land it on a later tick
+                clearQueuedPresses();
+                state.hasRealInput = isDown;
+                state.hasAppliedInput = isDown;
+                GJBaseGameLayer::handleButton(isDown, buttonId, isFirstPlayer);
+                return;
+            }
             logRealInputPress(isDown, player1);
             bool isHeld = intercept(this, isDown, isFirstPlayer);
             clearGhostScenery();
