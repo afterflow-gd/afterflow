@@ -4,6 +4,7 @@
 - a mode set to auto uses the stage ticks, so nothing changes unless you tune a mode.
 - **mobile.** the overlay is no longer built while a scene transition is running, the panel waits for the real scene the same way 2.2.6 did, and it hides itself while a geometry dash popup is open so its touches stop fighting the alert.
 - **mobile.** buffer players that fail to create now turn buffering off for that level instead of walking a null pointer, the collision logs and the ghost player are null checked, and the ios build no longer overrides the player effect calls ios does not have.
+- **update check.** version.txt alone no longer triggers the update popup, the release tag for that version has to exist too, so a bumped version.txt with nothing published yet waits until the tag is pushed.
 - bumped version to `2.2.7` (mod.json, version.txt, CMakeLists.txt).
 
 # v2.2.4
