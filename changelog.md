@@ -1,20 +1,8 @@
 # v2.2.7
-- **reverted to v2.2.5 behaviour.** the ghost scenery sweep, the per object child count snapshot, the candidate cap and the prediction budget are all back to the exact 2.2.5 code. the search is a plain tick by tick loop again, the budget is 8 ms scaled by the frame rate again and the ghost layer is swept with the bare 2.2.5 loop.
-- **fix: physics.** the prediction copies the player state exactly the way 2.2.5 did again. 2.2.6 pointed `m_maybeLastGroundObject` at the ghost and restored the ghost's own collision log pointers after `copyAttributes`, both of which changed ground and collision behaviour inside every prediction, so saves landed differently than the real player would have moved.
-- **fix: performance.** the prediction no longer snapshots a child count for every object in the level on every candidate click. that scan was the biggest per click cost on large levels, it is three container lookups now.
-- **fix: input.** wave clicks go through the buffer again. the 2.2.6 bypass that handed them straight to the game is gone, so wave no longer plays like the mod is switched off.
-- **fix: input.** queued clicks are delivered from the player update again, the same place 2.2.5 delivered them. 2.2.6 moved delivery into the base layer update, which runs at a different point in the frame, so every delivered click came out one frame off.
-- wave ignores the modes tab tile and keeps using the stage ticks.
-
+- **rolled back to 2.2.5.** the whole gameplay side is the 2.2.5 code again. the prediction, the ghost players, the click buffer, the wave handling, the budgets and the sweep are all the exact 2.2.5 functions, so it plays like 2.2.5 again.
+- **kept the modes tab.** the panel has a fourth tab now, one tile per game mode with the mode icon, the current ticks under it, `-5` / `+5` on the top row, `-` / `+` on the bottom row, tap the tile to put that mode back on auto and `all auto` to clear every mode. wave still follows the stage ticks.
+- a mode set to auto uses the stage ticks, so nothing changes unless you tune a mode.
 - bumped version to `2.2.7` (mod.json, version.txt, CMakeLists.txt).
-- [ios] the built dylib is ad-hoc signed after linking, so launchers that refuse unsigned mods no longer stop it with a missing code signature.
-- [ios] the eight ghost-visual player effects (spawn flash, streaks, spider run, rotations) are left out on iOS, where they crash Geode's no-JIT helper on the loading screen. prediction is unaffected and other platforms keep them.
-- [hardening] startup breadcrumbs now also mark settings, keybinds, listeners, menu init and menu scheduling.
-- [android] buffer setup now skips invalid ghost players and collision logs instead of dereferencing them; if the ghost players cannot be created, buffering is disabled for that level instead of crashing.
-- [ios] the overlay and launcher now hide while a GD popup is open, including the editor color picker, so popups are never covered and keep their own touch handling.
-- [hardening] startup breadcrumbs now log the build version and the type of the first scene the panel is built on, so a crash report identifies the exact build and scene.
-- [hardening] the update-progress overlay and the panel toggle now skip building while a scene transition (`CCTransitionScene`) is running, so the panel is never parented into a transition's subtree.
-- [hardening] ghost players are now dropped when the play layer leaves the scene (`PlayLayer::onExit`), not only on quit, so they are released before the play layer is destroyed.
 
 # v2.2.4
 
