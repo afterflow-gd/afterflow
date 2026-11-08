@@ -369,7 +369,7 @@ namespace {
         CCLayer* ghostRenderLayer = nullptr;
         unsigned ghostLayerBaseIndex = 0;
         bool performanceMode = false;
-        double userBudgetMilliseconds = 3.0;
+        double userBudgetMilliseconds = 6.0;
         bool automaticBudget = true;
         int keyStates[6] = { 0, 0, 0, 0, 0, 0 };
         std::unordered_set<GameObject*> simulationDisabledObjects;
@@ -2360,23 +2360,21 @@ finally {
         state.waveMarginEnabled = true;
         state.orbWindowTicks = 6;
         state.performanceMode = false;
-        state.userBudgetMilliseconds = 3.0;
+        state.userBudgetMilliseconds = 8.0;
         state.wasAutoReleased = false;
         state.consoleEnabled = false;
         state.showPathEnabled = false;
     }
 
     void clickBudget() {
-        // one click may never spend more than a slice of a frame, the old code scaled the budget by
-        // stepScale, which turned 8 ms into 24 ms at 60fps, one and a half frames spent simulating on
-        // every click, that stall is what made buffered input feel late and mushy
-        double budgetMilliseconds = std::clamp(state.userBudgetMilliseconds, 0.5, 4.0);
+        double budgetScale = std::clamp(static_cast<double>(stepScale()), 1.0, 3.0);
+        double budgetMilliseconds = state.userBudgetMilliseconds * budgetScale;
         if (state.automaticBudget) {
             auto* cocosDirector = CCDirector::get();
             double frameInterval = cocosDirector->getAnimationInterval() * 1000.0;
             double frameDuration = cocosDirector->getDeltaTime() * 1000.0;
             if (frameInterval > 0.0 && frameDuration > std::max(frameInterval * 2.0, 20.0)) {
-                budgetMilliseconds = std::min(budgetMilliseconds, 1.0);
+                budgetMilliseconds = std::min(budgetMilliseconds, 4.0 * budgetScale);
             }
         }
         state.budgetMilliseconds = budgetMilliseconds;
@@ -7299,27 +7297,12 @@ finally {
         if (!state.ghostRenderLayer) {
             return;
         }
+        // v2.2.5 swept the ghost layer with a bare loop, the 2.2.6 version detached node slots across
+        // both ghosts and both real players for every removed node, on every press, this is 2.2.5 again
         auto* childArray = state.ghostRenderLayer->getChildren();
         while (childArray && childArray->count() > state.ghostLayerBaseIndex) {
             auto* childNode = static_cast<CCNode*>(childArray->lastObject());
-            if (!childNode || typeinfo_cast<PlayerObject*>(childNode)) {
-                break;
-            }
-            childNode->retain();
-            detachGhostNodeSlot(state.ghostPlayer1, childNode);
-            detachGhostNodeSlot(state.ghostPlayer2, childNode);
-            if (auto* manager = GameManager::get()) {
-                if (auto* playLayer = manager->m_playLayer) {
-                    if (playLayer->m_player1 != state.ghostPlayer1) {
-                        detachGhostNodeSlot(playLayer->m_player1, childNode);
-                    }
-                    if (playLayer->m_player2 && playLayer->m_player2 != state.ghostPlayer2) {
-                        detachGhostNodeSlot(playLayer->m_player2, childNode);
-                    }
-                }
-            }
             state.ghostRenderLayer->removeChild(childNode, true);
-            childNode->release();
         }
     }
 
@@ -7333,7 +7316,7 @@ finally {
     PlayerObject* g_trackedGround1 = nullptr;
     PlayerObject* g_trackedGround2 = nullptr;
 
-    void recordLayerChildCounts(PlayLayer* gameLayer) {
+    [[maybe_unused]] void recordLayerChildCounts(PlayLayer* gameLayer) {
         g_layerChildCounts.clear();
         if (!gameLayer) {
             return;
@@ -7355,7 +7338,7 @@ finally {
         }
     }
 
-    void prunePredictionNodes() {
+    [[maybe_unused]] void prunePredictionNodes() {
         for (auto const& recorded : g_layerChildCounts) {
             auto* childList = recorded.parentNode->getChildren();
             while (childList && childList->count() > recorded.childCount) {
@@ -7583,7 +7566,6 @@ finally {
     }
 
     void reassertObjectStates() {
-        prunePredictionNodes();
         for (auto const& snapshot : state.objectSnapshots) {
             snapshot.gameObject->m_isActivated = snapshot.isObjectActivated;
             if (snapshot.effectObject) {
@@ -7895,7 +7877,6 @@ finally {
         if (!state.ghostPlayer1 || !player1) {
             return horizonTicks;
         }
-        recordLayerChildCounts(gameLayer);
         state.isSimulating = true;
         state.hasGhostDied = false;
         state.hasGhostHitPortal = false;
@@ -8371,28 +8352,6 @@ finally {
         return false;
     }
 
-    // a custom mode value can ask for hundreds of ticks of delay and the search simulated one candidate
-    // per tick, so a 240 tick custom value ran two hundred and forty full predictions inside a single
-    // click, that is why custom values performed so much worse than the built in stages, the first few
-    // candidates stay exact so a normal save is still found on the tick it always was, after that the
-    // search steps in strides and never runs more than MAX_SEARCH_CANDIDATES predictions per click
-    constexpr int EXACT_SEARCH_CANDIDATES = 8;
-    constexpr int MAX_SEARCH_CANDIDATES = 24;
-
-    int nextCandidateDelay(int candidateDelay, int maxDelayTicks) {
-        int stride = 1;
-        if (candidateDelay >= EXACT_SEARCH_CANDIDATES && maxDelayTicks > MAX_SEARCH_CANDIDATES) {
-            int span = maxDelayTicks - EXACT_SEARCH_CANDIDATES;
-            int slots = MAX_SEARCH_CANDIDATES - EXACT_SEARCH_CANDIDATES;
-            stride = (span + slots - 1) / slots;
-            if (stride < 1) {
-                stride = 1;
-            }
-        }
-        int next = candidateDelay + stride;
-        return next > maxDelayTicks ? maxDelayTicks + 1 : next;
-    }
-
     int smallestHeldTicks(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
         double budgetMilliseconds = -1.0, bool isQuiet = false, bool needsFullSearch = false) {
         if (budgetMilliseconds < 0.0) {
@@ -8404,7 +8363,7 @@ finally {
         debugBestDelay = 0;
         debugBestResult = -1;
         int sameCrashStreak = 0;
-        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; candidateDelay = nextCandidateDelay(candidateDelay, maxDelayTicks)) {
+        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
             SimEnd simulationEnd;
             int candidateResult = scoreFunction(candidateDelay, targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
@@ -8508,7 +8467,7 @@ finally {
         int targetTick = std::min(horizonTicks, baseDelay + st(12));
         debugBestDelay = 0;
         debugBestResult = -1;
-        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; candidateDelay = nextCandidateDelay(candidateDelay, maxDelayTicks)) {
+        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
             SimEnd simulationEnd;
             int candidateResult = waveScore(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
@@ -8552,7 +8511,7 @@ finally {
         int sameCrashStreak = 0;
         int waveBestDelay = 0;
         int waveBestResult = baseDelay;
-        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; candidateDelay = nextCandidateDelay(candidateDelay, maxDelayTicks)) {
+        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
             SimEnd simulationEnd;
             int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, hasWave ? horizonTicks : targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
