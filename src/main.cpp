@@ -2965,8 +2965,6 @@ finally {
         );
     }
 
-    // 2x2 grid: which 0 = -5 (top left), 1 = +5 (top right),
-    //           2 = -1 (bottom left), 3 = +1 (bottom right)
     CCRect modeTickStepRect(int index, int which) {
         auto cell = modeTickCellRect(index);
         float const boxW = 42.f;
@@ -7297,8 +7295,7 @@ finally {
         if (!state.ghostRenderLayer) {
             return;
         }
-        // v2.2.5 swept the ghost layer with a bare loop, the 2.2.6 version detached node slots across
-        // both ghosts and both real players for every removed node, on every press, this is 2.2.5 again
+
         auto* childArray = state.ghostRenderLayer->getChildren();
         while (childArray && childArray->count() > state.ghostLayerBaseIndex) {
             auto* childNode = static_cast<CCNode*>(childArray->lastObject());
@@ -7326,11 +7323,7 @@ finally {
                 g_layerChildCounts.push_back({ parentNode, parentNode->getChildrenCount() });
             }
         };
-        // the per object scan below used to record a child count for every single object in the level,
-        // and prunePredictionNodes then walked that whole list calling getChildren() on each entry, so a
-        // level with ten thousand objects cost ten thousand array pushes plus ten thousand lookups on
-        // every candidate click, only these top containers can actually receive a prediction node, so the
-        // scan is gone and the prune is three lookups
+
         addParent(gameLayer);
         addParent(gameLayer->m_objectLayer);
         if (gameLayer->m_aboveShaderObjectLayer != gameLayer->m_objectLayer) {
@@ -7474,8 +7467,7 @@ finally {
 
         ghostPlayer->m_lastGroundObject = realPlayer->m_lastGroundObject;
         ghostPlayer->m_preLastGroundObject = realPlayer->m_preLastGroundObject;
-        // 2.2.5 copied the real ground object here and the simulation matched the real player, pointing
-        // this at the ghost itself changed ground detection in every prediction, so it is copied again
+
         ghostPlayer->m_maybeLastGroundObject = realPlayer->m_maybeLastGroundObject;
         ghostPlayer->m_collidedObject = realPlayer->m_collidedObject;
         ghostPlayer->m_objectSnappedTo = realPlayer->m_objectSnappedTo;
@@ -8646,8 +8638,6 @@ finally {
         bool hasWave = isPlayer1Wave || (player2 && player2->m_isDart);
         bool isMini = (isPlayer1Wave && player1->m_vehicleSize < 1.f) || (player2 && player2->m_isDart && player2->m_vehicleSize < 1.f);
 
-        // wave is the one mode where the player reads every single click, so the click is handed to the
-        // game untouched instead of being pushed to a later tick, nothing is queued in wave any more
         if (WAVE_DIRECT_INPUT && hasWave) {
             clearQueuedPresses();
             state.hasAppliedInput = isDown;
@@ -9728,9 +9718,7 @@ class $modify(BufPlayerObject, PlayerObject) {
         if (gameLayer && this == gameLayer->m_player1 && !gameLayer->m_isPaused) {
             ++currentTick;
             if (state.isEnabled) {
-                // v2.2.5 delivered here, immediately before this player stepped, 2.2.6 moved it to the base
-                // layer update which runs at a different point in the frame, so every delivered click came
-                // out one frame off, that is the ordering that felt late
+
                 flushHeldPress(gameLayer, this);
             }
         }
@@ -10032,8 +10020,7 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         if (!state.isSimulating && buttonId == 1 && !state.isInjecting) {
             auto* player1 = this->m_player1;
             if (WAVE_DIRECT_INPUT && player1 && player1->m_isDart) {
-                // wave is read click by click, so the click is forwarded before any buffer work runs, no
-                // prediction, no scenery sweep, no queue, nothing that could land it on a later tick
+
                 clearQueuedPresses();
                 state.hasRealInput = isDown;
                 state.hasAppliedInput = isDown;
@@ -10134,7 +10121,6 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         }
         GJBaseGameLayer::playerTouchedTrigger(playerObject, effectObject);
     }
-
 
     void toggleGroupTriggered(int groupId, bool shouldActivate, gd::vector<int> const& remapKeyVector, int triggerId, int controlId) {
         if (state.isSimulating) {
