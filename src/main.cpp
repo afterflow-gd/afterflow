@@ -150,6 +150,10 @@ namespace {
     constexpr int CUSTOM_TICKS_MIN = 1;
     constexpr int CUSTOM_TICKS_MAX = 240;
     constexpr int CUSTOM_TICKS_SAFE = 120;
+    constexpr int MODE_TICK_COUNT = 8;
+    constexpr char const* MODE_TICK_NAMES[MODE_TICK_COUNT] = {
+        "cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing"
+    };
 
     struct CustomStage {
         int ticksAll;
@@ -161,15 +165,6 @@ namespace {
 
     int clampCustomTicks(int value) {
         return std::clamp(value, CUSTOM_TICKS_MIN, CUSTOM_TICKS_MAX);
-    }
-
-    void showHighTicksPopup() {
-        std::string message = fmt::format(
-            "delays over {0} ticks may lag or work worse than {0}.\n"
-            "your game might stutter or the stage might act weird.",
-            CUSTOM_TICKS_SAFE
-        );
-        FLAlertLayer::create("warning", message.c_str(), "ok i understand")->show();
     }
 
     void loadCustomStages() {
@@ -230,6 +225,90 @@ namespace {
         }
         loadCustomStages();
         return index >= STAGE_TABLE_SIZE && index < stageTotalCount();
+    }
+
+    int g_modeTicks[MODE_TICK_COUNT] = {};
+    bool g_modeTicksLoaded = false;
+
+    int clampModeTicks(int value) {
+        return std::clamp(value, 0, CUSTOM_TICKS_MAX);
+    }
+
+    void loadModeTicks() {
+        if (g_modeTicksLoaded) {
+            return;
+        }
+        g_modeTicksLoaded = true;
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            g_modeTicks[index] = 0;
+        }
+        std::string raw = Mod::get()->getSavedValue<std::string>("mode-ticks", "");
+        size_t start = 0;
+        int slot = 0;
+        while (start <= raw.size() && slot < MODE_TICK_COUNT) {
+            size_t end = raw.find(',', start);
+            if (end == std::string::npos) {
+                end = raw.size();
+            }
+            if (end > start) {
+                int value = 0;
+                bool found = false;
+                for (size_t index = start; index < end; ++index) {
+                    char character = raw[index];
+                    if (character >= '0' && character <= '9') {
+                        value = value * 10 + (character - '0');
+                        found = true;
+                    }
+                }
+                if (found) {
+                    g_modeTicks[slot] = clampModeTicks(value);
+                }
+                ++slot;
+            }
+            start = end + 1;
+        }
+    }
+
+    void saveModeTicks() {
+        std::string raw;
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            if (index > 0) {
+                raw += ',';
+            }
+            raw += std::to_string(g_modeTicks[index]);
+        }
+        Mod::get()->setSavedValue<std::string>("mode-ticks", raw);
+        (void)Mod::get()->saveData();
+    }
+
+    int modeTicksAt(int mode) {
+        loadModeTicks();
+        if (mode < 0 || mode >= MODE_TICK_COUNT) {
+            return 0;
+        }
+        return g_modeTicks[mode];
+    }
+
+    void setModeTicksAt(int mode, int value) {
+        loadModeTicks();
+        if (mode < 0 || mode >= MODE_TICK_COUNT) {
+            return;
+        }
+        g_modeTicks[mode] = clampModeTicks(value);
+        saveModeTicks();
+    }
+
+    int clearModeTicks() {
+        loadModeTicks();
+        int cleared = 0;
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            if (g_modeTicks[index] > 0) {
+                ++cleared;
+            }
+            g_modeTicks[index] = 0;
+        }
+        saveModeTicks();
+        return cleared;
     }
 
     struct QueuedInput {
@@ -454,6 +533,35 @@ namespace {
             return ticksAt240Hz;
         }
         return std::max(1, static_cast<int>(std::lround(ticksAt240Hz * stepScale())));
+    }
+
+    int activeModeIndex() {
+        auto* manager = GameManager::get();
+        if (!manager || !manager->m_playLayer) {
+            return -1;
+        }
+        auto* player = manager->m_playLayer->m_player1;
+        if (!player) {
+            return -1;
+        }
+        if (player->m_isShip) { return 1; }
+        if (player->m_isBall) { return 2; }
+        if (player->m_isBird) { return 3; }
+        if (player->m_isDart) { return 4; }
+        if (player->m_isRobot) { return 5; }
+        if (player->m_isSpider) { return 6; }
+        if (player->m_isSwing) { return 7; }
+        return 0;
+    }
+
+    int stageTicksForMode(int mode) {
+        if (mode == 4) {
+            return state.ticksWaveMode;
+        }
+        if (mode == 1) {
+            return std::clamp(state.shipMaxDelayTicks, 0, 16);
+        }
+        return state.ticksAllModes;
     }
 
     std::string wineUser() {
@@ -2314,7 +2422,7 @@ finally {
     constexpr float HEADER_Y = 428.f;
     constexpr float STATUS_HEIGHT = 28.f;
 
-    constexpr int TAB_COUNT = 3;
+    constexpr int TAB_COUNT = 4;
     constexpr float TAB_LABEL_Y = 388.f;
     constexpr float TAB_UNDERLINE_Y = 366.f;
     constexpr float TAB_HIT_HEIGHT = 36.f;
@@ -2391,10 +2499,10 @@ finally {
     constexpr float DISMISS_WIDTH = 30.f;
     constexpr float DISMISS_HEIGHT = 30.f;
 
-    constexpr int THEME_COUNT = 15;
+    constexpr int THEME_COUNT = 16;
     constexpr int THEMES_PER_ROW = 8;
     constexpr int THEME_ROW_COUNT = (THEME_COUNT + THEMES_PER_ROW - 1) / THEMES_PER_ROW;
-    constexpr float SWATCH_WIDTH = 76.f;
+    constexpr float SWATCH_WIDTH = 71.f;
     constexpr float SWATCH_HEIGHT = 38.f;
     constexpr float SWATCH_GAP = 6.f;
     constexpr float SWATCH_ROW_GAP = 8.f;
@@ -2483,6 +2591,41 @@ finally {
         return true;
     }
 
+    bool jsonIntList(std::string const& json, char const* key, std::vector<int>& out) {
+        std::string needle = std::string("\"") + key + "\"";
+        size_t pos = json.find(needle);
+        if (pos == std::string::npos) {
+            return false;
+        }
+        pos = json.find('[', pos + needle.size());
+        if (pos == std::string::npos) {
+            return false;
+        }
+        size_t end = json.find(']', pos);
+        if (end == std::string::npos) {
+            return false;
+        }
+        out.clear();
+        int value = 0;
+        bool found = false;
+        for (size_t index = pos; index < end; ++index) {
+            char character = json[index];
+            if (character >= '0' && character <= '9') {
+                value = value * 10 + (character - '0');
+                found = true;
+            }
+            else if (found) {
+                out.push_back(value);
+                value = 0;
+                found = false;
+            }
+        }
+        if (found) {
+            out.push_back(value);
+        }
+        return !out.empty();
+    }
+
     struct UITheme {
         char const* name;
         int primary;
@@ -2495,18 +2638,19 @@ finally {
         { "violet",  0x7C4DFF, 0xB79CFF, 0x16161A, 0xE8E9EE },
         { "ocean",   0x3BA3FF, 0x8FD0FF, 0x121820, 0xE6EDF5 },
         { "mint",    0x34D399, 0x8EE8C4, 0x101A17, 0xE4F2EC },
-        { "amber",   0xFFB454, 0xFFD79B, 0x1B1712, 0xF4EDE3 },
         { "rose",    0xFF6B8A, 0xFFB3C3, 0x1B1418, 0xF5E8EC },
         { "mono",    0xC9CDD6, 0xFFFFFF, 0x15161A, 0xEDEEF2 },
         { "ice",     0x67D5FF, 0xBFEAFF, 0x101820, 0xE6F1F7 },
-        { "sunset",  0xFF8A5B, 0xFFC29E, 0x1C1512, 0xF7EAE2 },
         { "grape",   0xA855F7, 0xD5B4FF, 0x17131F, 0xEFE7F7 },
         { "lime",    0xA3E635, 0xD9F99D, 0x141A10, 0xEAF3DF },
         { "crimson", 0xF43F5E, 0xFF9EB0, 0x1B1115, 0xF5E4E8 },
-        { "slate",   0x94A3B8, 0xE2E8F0, 0x151A21, 0xE8EDF3 },
         { "dark",    0xF2F3F7, 0x14161B, 0x0A0B0E, 0xF2F3F7 },
         { "white",   0x3B82F6, 0xFFFFFF, 0xF4F2ED, 0x1C1D22 },
         { "graphene", 0x8B94A3, 0xC9D1DC, 0x111318, 0xE6EAF0 },
+        { "aurora",  0x2DD4BF, 0x99F6E4, 0x0E1A19, 0xE2F5F1 },
+        { "nebula",  0x6366F1, 0xC7D2FE, 0x121331, 0xE9EAFB },
+        { "cobalt",  0x2563EB, 0x93C5FD, 0x0E1420, 0xE4EBF7 },
+        { "jade",    0x10B981, 0x6EE7B7, 0x0D1815, 0xE3F3EC },
     };
 
     ccColor3B accentColor() {
@@ -2790,11 +2934,49 @@ finally {
     }
 
     char const* tabName(int index) {
-        static char const* names[TAB_COUNT] = { "log", "stage", "settings" };
+        static char const* names[TAB_COUNT] = { "log", "stage", "modes", "settings" };
         if (index < 0 || index >= TAB_COUNT) {
             return "";
         }
         return names[index];
+    }
+
+    constexpr float MODE_TICK_TILE_W = 150.f;
+    constexpr float MODE_TICK_TILE_H = 92.f;
+    constexpr float MODE_TICK_TILE_GAP = 10.f;
+    constexpr float MODE_TICK_ROW_TOP = 290.f;
+    constexpr float MODE_TICKS_HINT_Y = 308.f;
+
+    CCRect modeTickCellRect(int index) {
+        int const column = index % 4;
+        int const row = index / 4;
+        float const totalWidth = MODE_TICK_TILE_W * 4.f + MODE_TICK_TILE_GAP * 3.f;
+        float const startX = CONTENT_X + (CONTENT_WIDTH - totalWidth) * 0.5f;
+        return CCRect(
+            startX + static_cast<float>(column) * (MODE_TICK_TILE_W + MODE_TICK_TILE_GAP),
+            MODE_TICK_ROW_TOP - static_cast<float>(row) * (MODE_TICK_TILE_H + MODE_TICK_TILE_GAP) - MODE_TICK_TILE_H,
+            MODE_TICK_TILE_W,
+            MODE_TICK_TILE_H
+        );
+    }
+
+    CCRect modeTickStepRect(int index, bool plus) {
+        auto cell = modeTickCellRect(index);
+        return CCRect(
+            plus ? cell.getMaxX() - 36.f : cell.getMinX() + 10.f,
+            cell.getMinY() + 8.f,
+            26.f,
+            22.f
+        );
+    }
+
+    CCRect modeTickIconRect(int index) {
+        auto cell = modeTickCellRect(index);
+        return CCRect(cell.getMidX() - 12.f, cell.getMaxY() - 54.f, 24.f, 24.f);
+    }
+
+    CCRect modeTicksAutoRect() {
+        return CCRect(CONTENT_RIGHT - 96.f, SETTINGS_HEADER_Y - 12.f, 96.f, 24.f);
     }
 
     CCRect logExpandRect() {
@@ -2985,32 +3167,58 @@ finally {
                 character = ' ';
             }
         }
-        constexpr size_t MAX_LENGTH = 30;
-        if (text.size() > MAX_LENGTH) {
-            text.resize(MAX_LENGTH - 3);
-            text += "...";
-        }
         return text;
     }
 
-    std::string fitLogLine(CCLabelBMFont* label, std::string text, float maxWidth) {
+    std::string wrapLogLine(CCLabelBMFont* label, std::string text, float maxWidth, float maxHeight) {
         if (!label) {
             return text;
         }
-        label->setString(text.c_str());
-        if (label->getContentSize().width * label->getScale() <= maxWidth) {
-            return text;
-        }
-        while (text.size() > 3) {
-            text.pop_back();
-            std::string candidate = text + "...";
-            label->setString(candidate.c_str());
-            if (label->getContentSize().width * label->getScale() <= maxWidth) {
-                return candidate;
+        float const baseScale = label->getScale();
+        constexpr int MAX_LINES = 2;
+        std::vector<std::string> lines;
+        std::string current;
+        size_t index = 0;
+        while (index < text.size()) {
+            size_t space = text.find(' ', index);
+            if (space == std::string::npos) {
+                space = text.size();
             }
+            std::string word = text.substr(index, space - index);
+            std::string candidate = current.empty() ? word : current + " " + word;
+            label->setString(candidate.c_str());
+            bool const overflows = !current.empty()
+                && label->getContentSize().width * baseScale > maxWidth
+                && static_cast<int>(lines.size()) < MAX_LINES - 1;
+            if (overflows) {
+                lines.push_back(current);
+                current = word;
+            }
+            else {
+                current = candidate;
+            }
+            index = space >= text.size() ? text.size() : space + 1;
         }
-        label->setString("");
-        return {};
+        lines.push_back(current);
+        std::string wrapped;
+        for (size_t line = 0; line < lines.size(); ++line) {
+            if (line > 0) {
+                wrapped += '\n';
+            }
+            wrapped += lines[line];
+        }
+        label->setString(wrapped.c_str());
+        float const width = label->getContentSize().width;
+        float const height = label->getContentSize().height;
+        float fitted = baseScale;
+        if (width > 0.f && width * fitted > maxWidth) {
+            fitted = fitted * maxWidth / width;
+        }
+        if (height > 0.f && height * fitted > maxHeight) {
+            fitted = fitted * maxHeight / height;
+        }
+        label->setScale(fitted);
+        return wrapped;
     }
 
     void renderLogRows(
@@ -3019,6 +3227,7 @@ finally {
         std::vector<std::string> const& logs,
         int scroll,
         float maxWidth,
+        float maxHeight,
         float baseScale,
         bool markLatest
     ) {
@@ -3036,11 +3245,11 @@ finally {
             std::string text = singleLineLog(logs[static_cast<size_t>(entry)]);
             bool const isLatest = markLatest && scroll <= 0 && row == rowCount - 1;
             text = (isLatest ? "> " : "  ") + text;
-            fitLogLine(label, text, maxWidth);
             bool lowPriority = text.find("host os") != std::string::npos
                 || text.find("loader") != std::string::npos
                 || text.find("version check") != std::string::npos;
             label->setScale(isLatest ? baseScale : (lowPriority ? baseScale * 0.88f : baseScale * 0.97f));
+            wrapLogLine(label, text, maxWidth, maxHeight);
             label->setColor(isLatest ? (lightSurface() ? accentColor() : secondaryColor()) : logTextColor());
             label->setOpacity(isLatest ? 255 : (lowPriority ? 150 : 232));
         }
@@ -3091,13 +3300,14 @@ finally {
     constexpr int TF_TAB0 = 3;
     constexpr int TF_TAB1 = 4;
     constexpr int TF_TAB2 = 5;
-    constexpr int TF_LOGPANE = 6;
-    constexpr int TF_COPY = 7;
-    constexpr int TF_STAGETRACK = 8;
-    constexpr int TF_CUSTOM = 9;
-    constexpr int TF_SLIDER = 10;
-    constexpr int TF_SWATCHES = 11;
-    constexpr int TF_CONFIG = 12;
+    constexpr int TF_TAB3 = 6;
+    constexpr int TF_LOGPANE = 7;
+    constexpr int TF_COPY = 8;
+    constexpr int TF_STAGETRACK = 9;
+    constexpr int TF_CUSTOM = 10;
+    constexpr int TF_SLIDER = 11;
+    constexpr int TF_SWATCHES = 12;
+    constexpr int TF_CONFIG = 13;
 
     struct TutorialStep {
         std::string title;
@@ -3150,12 +3360,18 @@ finally {
             "remove deletes the selected custom stage.",
             "going over 120 ticks may lag or work worse.",
         }, TF_CUSTOM, false, TF_CUSTOM, TF_SLIDER });
+        steps.push_back({ "modes tab", -1, {
+            "every game mode can have its own delay, in ticks.",
+            "your own icon for each mode is shown on the left.",
+            "tap - or + to tune one, tap the number to put it back on auto.",
+            "auto means it follows the stage you picked.",
+        }, TF_TAB2, true, TF_TAB2, TF_NONE });
         steps.push_back({ "settings tab", -1, {
             "pick a theme to change the panel colors.",
             "glow turns the soft glow behind the panel on or off.",
             "credits (top right) shows who helped make this.",
             "export copies your tuning as json, import loads it back.",
-        }, TF_TAB2, true, TF_SWATCHES, TF_CONFIG });
+        }, TF_TAB3, true, TF_SWATCHES, TF_CONFIG });
         steps.push_back({ "you're all set", -1, {
             "that's everything.",
             "tap the afterflow logo any time to see this tour again.",
@@ -3186,7 +3402,8 @@ finally {
             case TF_DISMISS: return CCRect(DISMISS_X, DISMISS_Y, DISMISS_WIDTH, DISMISS_HEIGHT);
             case TF_TAB0:
             case TF_TAB1:
-            case TF_TAB2: return tabSlotRect(kind - TF_TAB0);
+            case TF_TAB2:
+            case TF_TAB3: return tabSlotRect(kind - TF_TAB0);
             case TF_LOGPANE: return CCRect(LOG_X, 250.f, LOG_WIDTH, CARD_TOP - 250.f);
             case TF_COPY: return CCRect(COPY_X, COPY_Y, COPY_WIDTH, COPY_HEIGHT);
             case TF_STAGETRACK: return CCRect(STAGE_TRACK_X, STAGE_TRACK_Y, STAGE_TRACK_WIDTH, STAGE_TRACK_HEIGHT);
@@ -3246,7 +3463,7 @@ finally {
         return best;
     }
 
-    class AfterflowOverlay : public CCLayer {
+    class AfterflowOverlay : public CCLayer, public FLAlertLayerProtocol {
     public:
         static AfterflowOverlay* create();
         bool init() override;
@@ -3296,6 +3513,9 @@ finally {
             TickAdjust,
             TickField,
             TickSlider,
+            ModeTick,
+            ModeTickReset,
+            ModeTicksAuto,
             TutorialSkip,
             TutorialNext,
             Logo,
@@ -3311,6 +3531,8 @@ finally {
         void closeLogLayer();
         void exportConfig();
         void importConfig();
+        void showTicksWarning();
+        void FLAlert_Clicked(FLAlertLayer* layer, bool btn2) override;
         void updateModeIcons();
         void setConfigStatus(std::string const& text, bool ok);
         void layout();
@@ -3436,6 +3658,14 @@ finally {
         CCDrawNode* m_glow = nullptr;
         CCNode* m_modeIconContainer = nullptr;
         std::vector<SimplePlayer*> m_modeIcons;
+        CCDrawNode* m_modeTicksBar = nullptr;
+        CCLabelBMFont* m_modeTicksHeaderLabel = nullptr;
+        CCLabelBMFont* m_modeTicksHintLabel = nullptr;
+        CCLabelBMFont* m_modeTickNameLabels[MODE_TICK_COUNT] = {};
+        CCLabelBMFont* m_modeTickValueLabels[MODE_TICK_COUNT] = {};
+        CCLabelBMFont* m_modeTickBtnLabels[MODE_TICK_COUNT * 2] = {};
+        CCLabelBMFont* m_modeTicksAutoLabel = nullptr;
+        SimplePlayer* m_modeTickIcons[MODE_TICK_COUNT] = {};
         std::vector<int>& modeSlots();
         void saveModeSlots();
         std::vector<int> m_modeSlots;
@@ -3487,6 +3717,7 @@ finally {
         CCPoint m_resizeTL;
         bool m_isOpen = false;
         bool m_popupHidden = false;
+        bool m_hiddenForAlert = false;
         bool m_didPauseForPanel = false;
         bool m_isDraggingLauncher = false;
         bool m_launcherMoved = false;
@@ -3599,6 +3830,16 @@ finally {
         m_logViewBar = nullptr;
         for (int index = 0; index < LOG_VIEW_LINE_COUNT; ++index) { m_logViewLines[index] = nullptr; }
         m_modeIcons.clear();
+        m_modeTicksBar = nullptr;
+        m_modeTicksHeaderLabel = nullptr;
+        m_modeTicksHintLabel = nullptr;
+        m_modeTicksAutoLabel = nullptr;
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            m_modeTickNameLabels[index] = nullptr;
+            m_modeTickValueLabels[index] = nullptr;
+            m_modeTickIcons[index] = nullptr;
+        }
+        for (int index = 0; index < MODE_TICK_COUNT * 2; ++index) { m_modeTickBtnLabels[index] = nullptr; }
         for (int index = 0; index < LOG_LINE_COUNT; ++index) { m_activityLines[index] = nullptr; }
         for (int index = 0; index < STAGE_MAX_STAGES; ++index) { m_stageNameLabels[index] = nullptr; }
         for (int index = 0; index < 8; ++index) { m_tickBtnLabels[index] = nullptr; }
@@ -3936,6 +4177,107 @@ finally {
         m_configStatusLabel->setAnchorPoint(CCPoint(0.f, 0.5f));
         m_configStatusLabel->setPosition(CCPoint(configButtonRect(2).getMaxX() + 14.f, CONFIG_BUTTON_Y));
         m_deck->addChild(m_configStatusLabel, 3);
+
+        m_modesPane = CCNode::create();
+        m_modesPane->setPosition(CCPoint(0.f, 0.f));
+        m_deck->addChild(m_modesPane, 3);
+
+        m_modeTicksBar = makeDrawNode();
+        m_modesPane->addChild(m_modeTicksBar, 1);
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            drawCurvedRect(m_modeTicksBar, modeTickCellRect(index), 7.f, panelTint(8), panelTint(22), 1.f);
+            for (int which = 0; which < 2; ++which) {
+                drawCurvedRect(
+                    m_modeTicksBar,
+                    modeTickStepRect(index, which == 1),
+                    6.f,
+                    color4(accentColor(), 26),
+                    color4(accentColor(), 90),
+                    1.f
+                );
+            }
+        }
+        drawCurvedRect(m_modeTicksBar, modeTicksAutoRect(), 7.f, panelTint(10), panelTint(28), 1.f);
+
+        if (auto* header = makeLabel("ticks per mode", true, 0.62f, logTextColor())) {
+            header->setAnchorPoint(CCPoint(0.f, 0.5f));
+            header->setPosition(CCPoint(LOG_X + 22.f, SETTINGS_HEADER_Y));
+            m_modesPane->addChild(header, 2);
+            m_modeTicksHeaderLabel = header;
+        }
+        if (auto* hint = makeLabel("tap - or + to tune a mode, tap the tile for auto", false, 0.58f, faintTextColor())) {
+            fitLabelToWidth(hint, CONTENT_WIDTH - 44.f);
+            hint->setAnchorPoint(CCPoint(0.f, 0.5f));
+            hint->setPosition(CCPoint(LOG_X + 22.f, MODE_TICKS_HINT_Y));
+            m_modesPane->addChild(hint, 2);
+            m_modeTicksHintLabel = hint;
+        }
+
+        auto* manager = GameManager::get();
+        int modeFrames[MODE_TICK_COUNT] = {};
+        IconType modeTypes[MODE_TICK_COUNT] = {
+            IconType::Cube, IconType::Ship, IconType::Ball, IconType::Ufo,
+            IconType::Wave, IconType::Robot, IconType::Spider, IconType::Swing,
+        };
+        ccColor3B modePrimary = color3(255, 255, 255);
+        ccColor3B modeSecondary = color3(255, 255, 255);
+        if (manager) {
+            modeFrames[0] = manager->getPlayerFrame();
+            modeFrames[1] = manager->getPlayerShip();
+            modeFrames[2] = manager->getPlayerBall();
+            modeFrames[3] = manager->getPlayerBird();
+            modeFrames[4] = manager->getPlayerDart();
+            modeFrames[5] = manager->getPlayerRobot();
+            modeFrames[6] = manager->getPlayerSpider();
+            modeFrames[7] = manager->getPlayerSwing();
+            modePrimary = manager->colorForIdx(manager->getPlayerColor());
+            modeSecondary = manager->colorForIdx(manager->getPlayerColor2());
+        }
+
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            auto cell = modeTickCellRect(index);
+            auto iconRect = modeTickIconRect(index);
+            if (manager) {
+                auto* icon = SimplePlayer::create(1);
+                if (icon) {
+                    icon->updatePlayerFrame(modeFrames[index], modeTypes[index]);
+                    icon->setColors(modePrimary, modeSecondary);
+                    icon->setScale(iconRect.size.width / 40.f);
+                    icon->setPosition(CCPoint(iconRect.getMidX(), iconRect.getMidY()));
+                    icon->setOpacity(150);
+                    m_modesPane->addChild(icon, 2);
+                    m_modeTickIcons[index] = icon;
+                }
+            }
+            if (auto* name = makeLabel(MODE_TICK_NAMES[index], true, 0.56f, softTextColor())) {
+                fitLabelToWidth(name, MODE_TICK_TILE_W - 20.f);
+                name->setAnchorPoint(CCPoint(0.5f, 0.5f));
+                name->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 13.f));
+                m_modesPane->addChild(name, 2);
+                m_modeTickNameLabels[index] = name;
+            }
+            if (auto* value = makeLabel("auto", false, 0.54f, faintTextColor())) {
+                value->setAnchorPoint(CCPoint(0.5f, 0.5f));
+                value->setPosition(CCPoint(cell.getMidX(), cell.getMinY() + 19.f));
+                m_modesPane->addChild(value, 2);
+                m_modeTickValueLabels[index] = value;
+            }
+            for (int which = 0; which < 2; ++which) {
+                auto rect = modeTickStepRect(index, which == 1);
+                if (auto* glyph = makeLabel(which == 1 ? "+" : "-", false, 0.62f, accentColor())) {
+                    glyph->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
+                    m_modesPane->addChild(glyph, 2);
+                    m_modeTickBtnLabels[index * 2 + which] = glyph;
+                }
+            }
+        }
+        if (auto* autoLabel = makeLabel("all auto", false, 0.60f, accentColor())) {
+            auto rect = modeTicksAutoRect();
+            fitLabelToWidth(autoLabel, rect.size.width - 12.f);
+            autoLabel->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
+            m_modesPane->addChild(autoLabel, 2);
+            m_modeTicksAutoLabel = autoLabel;
+        }
 
         {
             auto rect = creditsRect();
@@ -4438,7 +4780,10 @@ finally {
 
         bool const showLog = m_activeTab == 0;
         bool const showStage = m_activeTab == 1;
-        bool const showSettings = m_activeTab == 2;
+        bool const showModes = m_activeTab == 2;
+        bool const showSettings = m_activeTab == 3;
+
+        if (m_modesPane) { m_modesPane->setVisible(showModes); }
 
         if (m_activityLabel) { m_activityLabel->setVisible(showLog); }
         if (m_activityCountLabel) { m_activityCountLabel->setVisible(showLog); }
@@ -4836,18 +5181,18 @@ finally {
             );
         }
 
-        renderLogRows(m_activityLines, LOG_LINE_COUNT, logs, paneScroll, LOG_WIDTH - 130.f, 0.96f * getUIFontScale(), true);
+        renderLogRows(m_activityLines, LOG_LINE_COUNT, logs, paneScroll, LOG_WIDTH - 130.f, LOG_LINE_STEP - 10.f, 0.96f * getUIFontScale(), true);
         if (logs.empty() && m_activityLines[0]) {
             auto* line = m_activityLines[0];
-            fitLogLine(line, "> no activity yet / inputs will appear here", LOG_WIDTH - 130.f);
+            wrapLogLine(line, "> no activity yet / inputs will appear here", LOG_WIDTH - 130.f, LOG_LINE_STEP - 10.f);
             line->setColor(faintTextColor());
         }
 
         if (m_logLayer) {
-            renderLogRows(m_logViewLines, LOG_VIEW_LINE_COUNT, logs, viewScroll, LOG_VIEW_CARD_WIDTH - 70.f, LOG_VIEW_LINE_SCALE * getUIFontScale(), true);
+            renderLogRows(m_logViewLines, LOG_VIEW_LINE_COUNT, logs, viewScroll, LOG_VIEW_CARD_WIDTH - 70.f, LOG_VIEW_LINE_STEP - 8.f, LOG_VIEW_LINE_SCALE * getUIFontScale(), true);
             if (logs.empty() && m_logViewLines[0]) {
                 auto* line = m_logViewLines[0];
-                fitLogLine(line, "> no activity yet / inputs will appear here", LOG_VIEW_CARD_WIDTH - 70.f);
+                wrapLogLine(line, "> no activity yet / inputs will appear here", LOG_VIEW_CARD_WIDTH - 70.f, LOG_VIEW_LINE_STEP - 8.f);
                 line->setColor(faintTextColor());
             }
             if (m_logViewCountLabel) {
@@ -4882,6 +5227,21 @@ finally {
         if (m_settingsValueLabels[2]) {
             m_settingsValueLabels[2]->setString(fmt::format("font  {}%", std::lround(getUIFontScale() * 100.f)).c_str());
             m_settingsValueLabels[2]->setColor(logTextColor());
+        }
+
+        int const modeNow = activeModeIndex();
+        for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+            int const ticks = modeTicksAt(index);
+            if (m_modeTickValueLabels[index]) {
+                m_modeTickValueLabels[index]->setString(ticks > 0 ? fmt::format("{}t", ticks).c_str() : "auto");
+                m_modeTickValueLabels[index]->setColor(ticks > 0 ? onSurfaceStrong() : faintTextColor());
+            }
+            if (auto* icon = m_modeTickIcons[index]) {
+                bool const isActive = index == modeNow;
+                float const baseScale = modeTickIconRect(index).size.width / 40.f;
+                icon->setOpacity(isActive ? 255 : 150);
+                icon->setScale(baseScale * (isActive ? 1.14f : 1.f));
+            }
         }
 
         int activeMode = -1;
@@ -4945,7 +5305,41 @@ finally {
         }
         m_popupHidden = popupOpen;
         setVisible(!popupOpen);
-        setTouchEnabled(!popupOpen && isMobileHost());
+        setTouchEnabled(!popupOpen && (m_isOpen || isMobileHost()));
+    }
+
+    void AfterflowOverlay::showTicksWarning() {
+        if (Mod::get()->getSavedValue<bool>("ticks-warning-seen", false)) {
+            return;
+        }
+        Mod::get()->setSavedValue<bool>("ticks-warning-seen", true);
+        (void)Mod::get()->saveData();
+        std::string message = fmt::format(
+            "delays over {0} ticks may lag or work worse than {0}.\n"
+            "your game might stutter or the stage might act weird.",
+            CUSTOM_TICKS_SAFE
+        );
+        if (m_isOpen) {
+            m_hiddenForAlert = true;
+            if (m_deck) { m_deck->setVisible(false); }
+            if (m_scrim) { m_scrim->setVisible(false); }
+            setTouchEnabled(false);
+        }
+        FLAlertLayer::create(this, "warning", message, "ok i understand", nullptr)->show();
+    }
+
+    void AfterflowOverlay::FLAlert_Clicked(FLAlertLayer*, bool) {
+        if (!m_hiddenForAlert) {
+            return;
+        }
+        m_hiddenForAlert = false;
+        if (!m_isOpen) {
+            return;
+        }
+        if (m_deck) { m_deck->setVisible(true); }
+        if (m_scrim) { m_scrim->setVisible(true); }
+        setTouchEnabled(true);
+        refresh();
     }
 
     void AfterflowOverlay::openPanel() {
@@ -5112,6 +5506,9 @@ finally {
 
     bool AfterflowOverlay::ccTouchBegan(CCTouch* touch, CCEvent*) {
         if (!touch) {
+            return false;
+        }
+        if (m_hiddenForAlert || m_popupHidden) {
             return false;
         }
         if (m_isOpen) {
@@ -5335,7 +5732,7 @@ finally {
                 if (auto* sliderStage = customStageFor(state.stageIndex)) {
                     int endTicks = releasedRow == 0 ? sliderStage->ticksAll : sliderStage->ticksWave;
                     if (endTicks > CUSTOM_TICKS_SAFE) {
-                        showHighTicksPopup();
+                        showTicksWarning();
                     }
                 }
             }
@@ -5954,7 +6351,7 @@ finally {
         setStageIndex(state.stageIndex);
         if (crossedSafe) {
             endTickEdit();
-            showHighTicksPopup();
+            showTicksWarning();
         }
     }
 
@@ -5988,10 +6385,10 @@ finally {
                 return HitTarget::Tab;
             }
         }
-        if (m_activeTab == 2 && creditsRect().containsPoint(point)) {
+        if (m_activeTab == 3 && creditsRect().containsPoint(point)) {
             return HitTarget::Credits;
         }
-        if (m_activeTab == 2) {
+        if (m_activeTab == 3) {
             for (int index = 0; index < THEME_COUNT; ++index) {
                 if (swatchRect(index).containsPoint(point)) {
                     if (stageSlot) { *stageSlot = index; }
@@ -6014,6 +6411,23 @@ finally {
             }
         }
         if (m_activeTab == 2) {
+            for (int index = 0; index < MODE_TICK_COUNT; ++index) {
+                for (int which = 0; which < 2; ++which) {
+                    if (modeTickStepRect(index, which == 1).containsPoint(point)) {
+                        if (stageSlot) { *stageSlot = index * 2 + which; }
+                        return HitTarget::ModeTick;
+                    }
+                }
+                if (modeTickCellRect(index).containsPoint(point)) {
+                    if (stageSlot) { *stageSlot = index; }
+                    return HitTarget::ModeTickReset;
+                }
+            }
+            if (modeTicksAutoRect().containsPoint(point)) {
+                return HitTarget::ModeTicksAuto;
+            }
+        }
+        if (m_activeTab == 3) {
             if (configButtonRect(0).containsPoint(point)) {
                 if (stageSlot) { *stageSlot = 0; }
                 return HitTarget::ImportConfig;
@@ -6049,7 +6463,7 @@ finally {
                 }
             }
         }
-        if (m_activeTab == 2 && creditsRect().containsPoint(point)) {
+        if (m_activeTab == 3 && creditsRect().containsPoint(point)) {
             return HitTarget::Credits;
         }
         if (m_activeTab == 1) {
@@ -6147,6 +6561,35 @@ finally {
             return;
         }
 
+        if (target == HitTarget::ModeTick) {
+            int const index = m_pressedStageSlot / 2;
+            bool const plus = (m_pressedStageSlot % 2) == 1;
+            int const before = modeTicksAt(index);
+            int const base = before > 0 ? before : stageTicksForMode(index);
+            int const next = clampModeTicks(base + (plus ? 1 : -1));
+            setModeTicksAt(index, next);
+            if (before <= CUSTOM_TICKS_SAFE && next > CUSTOM_TICKS_SAFE) {
+                showTicksWarning();
+            }
+            refresh();
+            return;
+        }
+
+        if (target == HitTarget::ModeTickReset) {
+            setModeTicksAt(m_pressedStageSlot, 0);
+            refresh();
+            return;
+        }
+
+        if (target == HitTarget::ModeTicksAuto) {
+            int const cleared = clearModeTicks();
+            if (cleared > 0) {
+                setConfigStatus("every mode follows the stage again", true);
+            }
+            refresh();
+            return;
+        }
+
         if (target == HitTarget::ReplayTutorial) {
             startTutorial();
             return;
@@ -6236,7 +6679,7 @@ finally {
                         setStageIndex(state.stageIndex);
                         refresh();
                         if (before <= CUSTOM_TICKS_SAFE && ticks > CUSTOM_TICKS_SAFE) {
-                            showHighTicksPopup();
+                            showTicksWarning();
                         }
                     }
                 }
@@ -6283,7 +6726,8 @@ finally {
         std::string text = fmt::format(
             "{{\"groundHorizonTicks\":{},\"waveHorizonTicks\":{},\"spamGapTicks\":{},"
             "\"autoReleaseWindowTicks\":{},\"orbWindowTicks\":{},\"shipMaxDelayTicks\":{},"
-            "\"shipSpamGapTicks\":{},\"robotHoldTicks\":{}}}",
+            "\"shipSpamGapTicks\":{},\"robotHoldTicks\":{},"
+            "\"modeTicks\":[{},{},{},{},{},{},{},{}]}}",
             state.groundHorizonTicks,
             state.waveHorizonTicks,
             state.spamGapTicks,
@@ -6291,7 +6735,15 @@ finally {
             state.orbWindowTicks,
             state.shipMaxDelayTicks,
             state.shipSpamGapTicks,
-            robotHoldHistory.pick(20, 50)
+            robotHoldHistory.pick(20, 50),
+            modeTicksAt(0),
+            modeTicksAt(1),
+            modeTicksAt(2),
+            modeTicksAt(3),
+            modeTicksAt(4),
+            modeTicksAt(5),
+            modeTicksAt(6),
+            modeTicksAt(7)
         );
         bool ok = geode::utils::clipboard::write(text.c_str());
         setConfigStatus(ok ? "exported to clipboard" : "export failed", ok);
@@ -6340,6 +6792,16 @@ finally {
         }
         if (jsonInt(text, "robotHoldTicks", value)) {
             robotHoldHistory.add(std::clamp(value, 1, 200));
+            ++applied;
+        }
+
+        std::vector<int> importedModeTicks;
+        if (jsonIntList(text, "modeTicks", importedModeTicks)) {
+            loadModeTicks();
+            for (int index = 0; index < MODE_TICK_COUNT && index < static_cast<int>(importedModeTicks.size()); ++index) {
+                g_modeTicks[index] = clampModeTicks(importedModeTicks[index]);
+            }
+            saveModeTicks();
             ++applied;
         }
 
@@ -6676,6 +7138,20 @@ finally {
         return ghostPlayer;
     }
 
+    void forgetGhostEffect(PlayerObject* ghostPlayer, CCNode* node) {
+        if (!ghostPlayer || !node) {
+            return;
+        }
+        if (ghostPlayer->m_trailingParticles == node) { ghostPlayer->m_trailingParticles = nullptr; }
+        if (ghostPlayer->m_shipClickParticles == node) { ghostPlayer->m_shipClickParticles = nullptr; }
+        if (ghostPlayer->m_dashParticles == node) { ghostPlayer->m_dashParticles = nullptr; }
+        if (ghostPlayer->m_dashFireSprite == node) { ghostPlayer->m_dashFireSprite = nullptr; }
+        if (ghostPlayer->m_dashSpritesContainer == node) { ghostPlayer->m_dashSpritesContainer = nullptr; }
+        if (ghostPlayer->m_shipStreak == node) { ghostPlayer->m_shipStreak = nullptr; }
+        if (ghostPlayer->m_ghostTrail == node) { ghostPlayer->m_ghostTrail = nullptr; }
+        if (ghostPlayer->m_dashRing == node) { ghostPlayer->m_dashRing = nullptr; }
+    }
+
     void sweepGhostLayer() {
         if (!state.ghostRenderLayer) {
             return;
@@ -6683,6 +7159,11 @@ finally {
         auto* childArray = state.ghostRenderLayer->getChildren();
         while (childArray && childArray->count() > state.ghostLayerBaseIndex) {
             auto* childNode = static_cast<CCNode*>(childArray->lastObject());
+            if (!childNode || typeinfo_cast<PlayerObject*>(childNode)) {
+                break;
+            }
+            forgetGhostEffect(state.ghostPlayer1, childNode);
+            forgetGhostEffect(state.ghostPlayer2, childNode);
             state.ghostRenderLayer->removeChild(childNode, true);
         }
     }
@@ -7802,7 +8283,9 @@ finally {
         if (hasWave) {
             horizonTicks = fullWaveHorizon(isMini);
         }
-        int maxDelayTicks = st(hasWave ? state.ticksWaveMode : (hasShip ? std::clamp(state.shipMaxDelayTicks, 0, 16) : state.ticksAllModes));
+        int const stageDelayTicks = hasWave ? state.ticksWaveMode : (hasShip ? std::clamp(state.shipMaxDelayTicks, 0, 16) : state.ticksAllModes);
+        int const modeDelayTicks = modeTicksAt(activeModeIndex());
+        int maxDelayTicks = st(modeDelayTicks > 0 ? modeDelayTicks : stageDelayTicks);
         if (maxDelayTicks <= 0) {
             state.hasAppliedInput = isDown;
             return false;
