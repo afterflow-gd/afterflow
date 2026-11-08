@@ -2,6 +2,8 @@
 - **rolled back to 2.2.5.** the whole gameplay side is the 2.2.5 code again. the prediction, the ghost players, the click buffer, the wave handling, the budgets and the sweep are all the exact 2.2.5 functions, so it plays like 2.2.5 again.
 - **kept the modes tab.** the panel has a fourth tab now, one tile per game mode with the mode icon, the current ticks under it, `-5` / `+5` on the top row, `-` / `+` on the bottom row, tap the tile to put that mode back on auto and `all auto` to clear every mode. wave still follows the stage ticks.
 - a mode set to auto uses the stage ticks, so nothing changes unless you tune a mode.
+- **mobile.** the overlay is no longer built while a scene transition is running, the panel waits for the real scene the same way 2.2.6 did, and it hides itself while a geometry dash popup is open so its touches stop fighting the alert.
+- **mobile.** buffer players that fail to create now turn buffering off for that level instead of walking a null pointer, the collision logs and the ghost player are null checked, and the ios build no longer overrides the player effect calls ios does not have.
 - bumped version to `2.2.7` (mod.json, version.txt, CMakeLists.txt).
 
 # v2.2.4
