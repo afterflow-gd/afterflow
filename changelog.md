@@ -1,14 +1,12 @@
-# v2.2.6-beta
+# v2.2.7
 - **reverted to v2.2.5 behaviour.** the ghost scenery sweep, the per object child count snapshot, the candidate cap and the prediction budget are all back to the exact 2.2.5 code. the search is a plain tick by tick loop again, the budget is 8 ms scaled by the frame rate again and the ghost layer is swept with the bare 2.2.5 loop.
 - **fix: physics.** the prediction copies the player state exactly the way 2.2.5 did again. 2.2.6 pointed `m_maybeLastGroundObject` at the ghost and restored the ghost's own collision log pointers after `copyAttributes`, both of which changed ground and collision behaviour inside every prediction, so saves landed differently than the real player would have moved.
-- **fix: performance.** custom mode values no longer cost one full prediction per tick. a 240 tick custom value used to run up to 240 predictions inside a single click, which is why custom values ran so much worse than the stages. the first 8 candidates stay exact and the rest step in strides, capped at 24 predictions per click.
 - **fix: performance.** the prediction no longer snapshots a child count for every object in the level on every candidate click. that scan was the biggest per click cost on large levels, it is three container lookups now.
 - **fix: input.** wave clicks go through the buffer again. the 2.2.6 bypass that handed them straight to the game is gone, so wave no longer plays like the mod is switched off.
 - **fix: input.** queued clicks are delivered from the player update again, the same place 2.2.5 delivered them. 2.2.6 moved delivery into the base layer update, which runs at a different point in the frame, so every delivered click came out one frame off.
-- **fix: input.** the prediction budget is capped at 4 ms and defaults to 3 ms. it used to be 8 ms multiplied by the frame scale, up to 24 ms per click at 60fps, so a single click could stall the game for a frame and a half.
 - wave ignores the modes tab tile and keeps using the stage ticks.
 
-- bumped version to `2.2.6-beta` (mod.json, version.txt). CMakeLists.txt stays numeric at `2.2.6` because CMake's `project(VERSION)` rejects prerelease tags.
+- bumped version to `2.2.7` (mod.json, version.txt, CMakeLists.txt).
 - [ios] the built dylib is ad-hoc signed after linking, so launchers that refuse unsigned mods no longer stop it with a missing code signature.
 - [ios] the eight ghost-visual player effects (spawn flash, streaks, spider run, rotations) are left out on iOS, where they crash Geode's no-JIT helper on the loading screen. prediction is unaffected and other platforms keep them.
 - [hardening] startup breadcrumbs now also mark settings, keybinds, listeners, menu init and menu scheduling.
