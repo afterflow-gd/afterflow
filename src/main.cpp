@@ -8769,7 +8769,7 @@ finally {
         bool hasUfo = player1->m_isBird || (player2 && player2->m_isBird);
         bool hasBall = player1->m_isBall || (player2 && player2->m_isBall);
         bool hasSwing = player1->m_isSwing || (player2 && player2->m_isSwing);
-        if ((hasWave || hasShip || (hasUfo && state.ufoSmartEnabled) || (hasBall && state.ballSmartEnabled) || (hasSwing && state.swingSmartEnabled)) &&
+        if ((hasShip || (hasUfo && state.ufoSmartEnabled) || (hasBall && state.ballSmartEnabled) || (hasSwing && state.swingSmartEnabled)) &&
             state.rapidInputTicks >= SPAM_STREAK_COUNT) {
             if (!state.queuedInputs.empty()) {
                 for (size_t index = 0; index < state.queuedInputs.size(); ++index) {
@@ -8864,6 +8864,13 @@ finally {
                  : isUfoPress      ? ufoScore(playLayer, player1, player2, isDual, 0, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd)
                  : isShipInput     ? shipScore(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, horizonTicks, &simulationEnd)
                                  : predictOrbCandidates(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+
+        // wave is pixel precise, so a click that already survives the whole horizon is applied on the
+        // spot instead of being shifted forward, delaying it is what made wave input feel mushy
+        if (isCubeStyleWave && baseDelay >= horizonTicks) {
+            state.hasAppliedInput = isDown;
+            return false;
+        }
 
         std::string tickTagText = midTickFraction > 0.f ? fmt::format(" @{:.2f}", midTickFraction) : std::string();
         if (baseDelay >= horizonTicks) {
