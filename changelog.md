@@ -1,4 +1,5 @@
 # v2.2.6-beta
+- **fix: performance.** custom mode values no longer cost one full prediction per tick. a 240 tick custom value used to run up to 240 predictions inside a single click, which is why custom values ran so much worse than the stages. the first 8 candidates stay exact and the rest step in strides, capped at 24 predictions per click.
 - **fix: performance.** the prediction no longer snapshots a child count for every object in the level on every candidate click. that scan was the biggest per click cost on large levels, it is three container lookups now.
 - **fix: input.** wave clicks go through the buffer again. the 2.2.6 bypass that handed them straight to the game is gone, so wave no longer plays like the mod is switched off.
 - **fix: input.** queued clicks are delivered from the player update again, the same place 2.2.5 delivered them. 2.2.6 moved delivery into the base layer update, which runs at a different point in the frame, so every delivered click came out one frame off.
