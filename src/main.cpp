@@ -8467,6 +8467,28 @@ finally {
         return false;
     }
 
+    // a custom mode value can ask for hundreds of ticks of delay and the search simulated one candidate
+    // per tick, so a 240 tick custom value ran two hundred and forty full predictions inside a single
+    // click, that is why custom values performed so much worse than the built in stages, the first few
+    // candidates stay exact so a normal save is still found on the tick it always was, after that the
+    // search steps in strides and never runs more than MAX_SEARCH_CANDIDATES predictions per click
+    constexpr int EXACT_SEARCH_CANDIDATES = 8;
+    constexpr int MAX_SEARCH_CANDIDATES = 24;
+
+    int nextCandidateDelay(int candidateDelay, int maxDelayTicks) {
+        int stride = 1;
+        if (candidateDelay >= EXACT_SEARCH_CANDIDATES && maxDelayTicks > MAX_SEARCH_CANDIDATES) {
+            int span = maxDelayTicks - EXACT_SEARCH_CANDIDATES;
+            int slots = MAX_SEARCH_CANDIDATES - EXACT_SEARCH_CANDIDATES;
+            stride = (span + slots - 1) / slots;
+            if (stride < 1) {
+                stride = 1;
+            }
+        }
+        int next = candidateDelay + stride;
+        return next > maxDelayTicks ? maxDelayTicks + 1 : next;
+    }
+
     int smallestHeldTicks(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
         double budgetMilliseconds = -1.0, bool isQuiet = false, bool needsFullSearch = false) {
         if (budgetMilliseconds < 0.0) {
@@ -8478,7 +8500,7 @@ finally {
         debugBestDelay = 0;
         debugBestResult = -1;
         int sameCrashStreak = 0;
-        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
+        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; candidateDelay = nextCandidateDelay(candidateDelay, maxDelayTicks)) {
             SimEnd simulationEnd;
             int candidateResult = scoreFunction(candidateDelay, targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
@@ -8582,7 +8604,7 @@ finally {
         int targetTick = std::min(horizonTicks, baseDelay + st(12));
         debugBestDelay = 0;
         debugBestResult = -1;
-        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
+        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; candidateDelay = nextCandidateDelay(candidateDelay, maxDelayTicks)) {
             SimEnd simulationEnd;
             int candidateResult = waveScore(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
@@ -8626,7 +8648,7 @@ finally {
         int sameCrashStreak = 0;
         int waveBestDelay = 0;
         int waveBestResult = baseDelay;
-        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
+        for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; candidateDelay = nextCandidateDelay(candidateDelay, maxDelayTicks)) {
             SimEnd simulationEnd;
             int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, hasWave ? horizonTicks : targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
