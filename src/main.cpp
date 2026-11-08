@@ -150,8 +150,7 @@ namespace {
     constexpr int CUSTOM_STAGE_LIMIT = 4;
     constexpr int CUSTOM_TICKS_MIN = 1;
     constexpr int CUSTOM_TICKS_MAX = 240;
-    constexpr int CUSTOM_TICKS_SAFE = 120;
-    constexpr int MODE_TICKS_MAX = 60;
+    constexpr int MODE_TICKS_MAX = 240;
     constexpr int MODE_TICK_COUNT = 8;
     constexpr char const* MODE_TICK_NAMES[MODE_TICK_COUNT] = {
         "cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing"
@@ -1615,7 +1614,6 @@ finally {
                 return false;
             }
             this->setTouchEnabled(true);
-            this->setKeypadEnabled(true);
             return true;
         }
 
@@ -1626,7 +1624,6 @@ finally {
         void ccTouchMoved(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
         void ccTouchEnded(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
         void ccTouchCancelled(cocos2d::CCTouch*, cocos2d::CCEvent*) override {}
-        void keyBackClicked() override {}
     };
 
     struct UpdateOverlayState {
@@ -2876,6 +2873,10 @@ finally {
         return CCRect(CONTENT_RIGHT - 22.f - 104.f, STAGE_META_Y - 15.f, 104.f, 30.f);
     }
 
+    CCRect stageKeyRect() {
+        return CCRect(CONTENT_RIGHT - 22.f - 210.f, STAGE_HINT_Y - 17.f, 210.f, 34.f);
+    }
+
     CCRect customRemoveRect() {
         return CCRect(CONTENT_RIGHT - 22.f - 104.f - 8.f - 88.f, STAGE_META_Y - 15.f, 88.f, 30.f);
     }
@@ -2945,7 +2946,7 @@ finally {
     }
 
     constexpr float MODE_TICK_TILE_W = 150.f;
-    constexpr float MODE_TICK_TILE_H = 92.f;
+    constexpr float MODE_TICK_TILE_H = 100.f;
     constexpr float MODE_TICK_TILE_GAP = 10.f;
     constexpr float MODE_TICK_ROW_TOP = 290.f;
     constexpr float MODE_TICKS_HINT_Y = 308.f;
@@ -2963,23 +2964,31 @@ finally {
         );
     }
 
-    CCRect modeTickStepRect(int index, bool plus) {
+    // 2x2 grid: which 0 = -5 (top left), 1 = +5 (top right),
+    //           2 = -1 (bottom left), 3 = +1 (bottom right)
+    CCRect modeTickStepRect(int index, int which) {
         auto cell = modeTickCellRect(index);
-        return CCRect(
-            plus ? cell.getMaxX() - 36.f : cell.getMinX() + 10.f,
-            cell.getMinY() + 8.f,
-            26.f,
-            22.f
-        );
+        float const boxW = 42.f;
+        float const boxH = 20.f;
+        float const gapX = 16.f;
+        float const totalWidth = boxW * 2.f + gapX;
+        float const startX = cell.getMinX() + (cell.size.width - totalWidth) * 0.5f;
+        float const x = startX + ((which % 2) == 0 ? 0.f : boxW + gapX);
+        float const y = which < 2 ? cell.getMinY() + 30.f : cell.getMinY() + 6.f;
+        return CCRect(x, y, boxW, boxH);
     }
 
     CCRect modeTickIconRect(int index) {
         auto cell = modeTickCellRect(index);
-        return CCRect(cell.getMidX() - 12.f, cell.getMaxY() - 54.f, 24.f, 24.f);
+        return CCRect(cell.getMidX() - 9.f, cell.getMaxY() - 35.f, 18.f, 18.f);
     }
 
     CCRect modeTicksAutoRect() {
         return CCRect(CONTENT_RIGHT - 96.f, SETTINGS_HEADER_Y - 12.f, 96.f, 24.f);
+    }
+
+    CCRect modeApplyRect() {
+        return CCRect(CONTENT_RIGHT - 96.f - 8.f - 88.f, SETTINGS_HEADER_Y - 12.f, 88.f, 24.f);
     }
 
     CCRect logExpandRect() {
@@ -3089,6 +3098,25 @@ finally {
             return fmt::format("custom {}", index - STAGE_TABLE_SIZE + 1);
         }
         return stageLabelAt(index);
+    }
+
+    std::string stageKeySetting(int index) {
+        if (index >= 0 && index < STAGE_TABLE_SIZE) {
+            return fmt::format("stage-key-{}", stageName(index));
+        }
+        int custom = index - STAGE_TABLE_SIZE;
+        if (custom >= 0 && custom < CUSTOM_STAGE_LIMIT) {
+            return fmt::format("stage-key-c{}", custom + 1);
+        }
+        return {};
+    }
+
+    std::string stageKeyText(int index) {
+        auto setting = stageKeySetting(index);
+        if (setting.empty()) {
+            return "unbound";
+        }
+        return lowercaseText(keybindList(setting));
     }
 
     void fitLabelToWidth(CCLabelBMFont* label, float maxWidth) {
@@ -3361,12 +3389,11 @@ finally {
             "then drag the slider, tap the number and type, or use",
             "-5 / -1 / +1 / +5 to set the delay for all and wave.",
             "remove deletes the selected custom stage.",
-            "going over 120 ticks may lag or work worse.",
         }, TF_CUSTOM, false, TF_CUSTOM, TF_SLIDER });
         steps.push_back({ "modes tab", -1, {
             "every game mode can have its own delay, in ticks.",
             "your own icon for each mode is shown on the left.",
-            "tap - or + to tune one, tap the number to put it back on auto.",
+            "tap - / + or -5 / +5 to tune one, tap the tile to put it back on auto.",
             "auto means it follows the stage you picked.",
         }, TF_TAB2, true, TF_TAB2, TF_NONE });
         steps.push_back({ "settings tab", -1, {
@@ -3466,12 +3493,40 @@ finally {
         return best;
     }
 
-    class AfterflowOverlay : public CCLayer, public FLAlertLayerProtocol {
+    class AfterflowOverlay : public CCLayer, public FLAlertLayerProtocol, public cocos2d::CCKeyboardDelegate {
     public:
         static AfterflowOverlay* create();
         bool init() override;
         void onEnter() override;
         void onExit() override;
+
+        void keyDown(cocos2d::enumKeyCodes key, double) override {
+            if (!m_listeningStageKey) {
+                return;
+            }
+            if (key == cocos2d::KEY_Shift || key == cocos2d::KEY_LeftShift || key == cocos2d::KEY_RightShift
+                || key == cocos2d::KEY_Control || key == cocos2d::KEY_LeftControl || key == cocos2d::KEY_RightControl
+                || key == cocos2d::KEY_Alt || key == cocos2d::KEY_LeftMenu || key == cocos2d::KEY_RightMenu) {
+                return;
+            }
+            m_listeningStageKey = false;
+            cocos2d::CCKeyboardDispatcher::get()->removeDelegate(this);
+            if (key == cocos2d::KEY_None || key == cocos2d::KEY_Escape) {
+                refresh();
+                return;
+            }
+            auto setting = stageKeySetting(state.stageIndex);
+            if (setting.empty()) {
+                refresh();
+                return;
+            }
+            std::vector<Keybind> binds;
+            binds.push_back(Keybind(key, KeyboardModifier::None));
+            Mod::get()->setSettingValue<std::vector<Keybind>>(setting, binds);
+            (void)Mod::get()->saveData();
+            say("{} key set to {}", stageTitleAt(state.stageIndex), stageKeyText(state.stageIndex));
+            refresh();
+        }
         void refresh();
         void rebuildDeck();
         void openPanel();
@@ -3513,12 +3568,15 @@ finally {
             ModeIconAdd,
             StageAdd,
             CustomRemove,
+            StageKey,
             TickAdjust,
             TickField,
             TickSlider,
             ModeTick,
             ModeTickReset,
+            ModeIconIgnore,
             ModeTicksAuto,
+            ModesApply,
             TutorialSkip,
             TutorialNext,
             Logo,
@@ -3534,7 +3592,6 @@ finally {
         void closeLogLayer();
         void exportConfig();
         void importConfig();
-        void showTicksWarning();
         void FLAlert_Clicked(FLAlertLayer* layer, bool btn2) override;
         void updateModeIcons();
         void setConfigStatus(std::string const& text, bool ok);
@@ -3592,6 +3649,8 @@ finally {
         CCLabelBMFont* m_activityCountLabel = nullptr;
         CCLabelBMFont* m_activityLines[LOG_LINE_COUNT] = {};
         CCLabelBMFont* m_stageNameLabels[STAGE_MAX_STAGES] = {};
+        CCLabelBMFont* m_stageKeyLabel = nullptr;
+        bool m_listeningStageKey = false;
         CCLabelBMFont* m_stageHintKeyLabel = nullptr;
         CCLabelBMFont* m_stageHintLabel = nullptr;
         CCLabelBMFont* m_panelHintKeyLabel = nullptr;
@@ -3647,7 +3706,6 @@ finally {
         int m_editingRow = -1;
         bool m_suppressTickInput = false;
         bool m_draggingSlider = false;
-        bool m_sliderStartedOver = false;
         int m_sliderRow = -1;
         CCLabelBMFont* m_customAddLabel = nullptr;
         CCLabelBMFont* m_customRemoveLabel = nullptr;
@@ -3666,8 +3724,9 @@ finally {
         CCLabelBMFont* m_modeTicksHintLabel = nullptr;
         CCLabelBMFont* m_modeTickNameLabels[MODE_TICK_COUNT] = {};
         CCLabelBMFont* m_modeTickValueLabels[MODE_TICK_COUNT] = {};
-        CCLabelBMFont* m_modeTickBtnLabels[MODE_TICK_COUNT * 2] = {};
+        CCLabelBMFont* m_modeTickBtnLabels[MODE_TICK_COUNT * 4] = {};
         CCLabelBMFont* m_modeTicksAutoLabel = nullptr;
+        CCLabelBMFont* m_modeApplyLabel = nullptr;
         SimplePlayer* m_modeTickIcons[MODE_TICK_COUNT] = {};
         std::vector<int>& modeSlots();
         void saveModeSlots();
@@ -4040,6 +4099,12 @@ finally {
             m_deck->addChild(hint, 3);
             m_stageTimingLabels[2] = hint;
         }
+        if (auto* keyLabel = makeLabel("key: unbound", false, 0.72f, accentColor())) {
+            auto keyRect = stageKeyRect();
+            keyLabel->setPosition(CCPoint(keyRect.getMidX(), keyRect.getMidY()));
+            m_deck->addChild(keyLabel, 3);
+            m_stageKeyLabel = keyLabel;
+        }
 
         for (int row = 0; row < 2; ++row) {
             auto valueRect = tickValueRect(row);
@@ -4189,10 +4254,10 @@ finally {
         m_modesPane->addChild(m_modeTicksBar, 1);
         for (int index = 0; index < MODE_TICK_COUNT; ++index) {
             drawCurvedRect(m_modeTicksBar, modeTickCellRect(index), 7.f, panelTint(8), panelTint(22), 1.f);
-            for (int which = 0; which < 2; ++which) {
+            for (int which = 0; which < 4; ++which) {
                 drawCurvedRect(
                     m_modeTicksBar,
-                    modeTickStepRect(index, which == 1),
+                    modeTickStepRect(index, which),
                     6.f,
                     color4(accentColor(), 26),
                     color4(accentColor(), 90),
@@ -4201,6 +4266,7 @@ finally {
             }
         }
         drawCurvedRect(m_modeTicksBar, modeTicksAutoRect(), 7.f, panelTint(10), panelTint(28), 1.f);
+        drawCurvedRect(m_modeTicksBar, modeApplyRect(), 7.f, color4(accentColor(), 34), color4(accentColor(), 110), 1.f);
 
         if (auto* header = makeLabel("ticks per mode", true, 0.62f, logTextColor())) {
             header->setAnchorPoint(CCPoint(0.f, 0.5f));
@@ -4208,7 +4274,7 @@ finally {
             m_modesPane->addChild(header, 2);
             m_modeTicksHeaderLabel = header;
         }
-        if (auto* hint = makeLabel("tap - or + to tune a mode, tap the tile for auto", false, 0.58f, faintTextColor())) {
+        if (auto* hint = makeLabel("top row -5 / +5, bottom row - / +, tap the tile for auto", false, 0.58f, faintTextColor())) {
             fitLabelToWidth(hint, CONTENT_WIDTH - 44.f);
             hint->setAnchorPoint(CCPoint(0.f, 0.5f));
             hint->setPosition(CCPoint(LOG_X + 22.f, MODE_TICKS_HINT_Y));
@@ -4255,24 +4321,33 @@ finally {
             if (auto* name = makeLabel(MODE_TICK_NAMES[index], true, 0.56f, softTextColor())) {
                 fitLabelToWidth(name, MODE_TICK_TILE_W - 20.f);
                 name->setAnchorPoint(CCPoint(0.5f, 0.5f));
-                name->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 13.f));
+                name->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 10.f));
                 m_modesPane->addChild(name, 2);
                 m_modeTickNameLabels[index] = name;
             }
             if (auto* value = makeLabel("auto", false, 0.54f, faintTextColor())) {
                 value->setAnchorPoint(CCPoint(0.5f, 0.5f));
-                value->setPosition(CCPoint(cell.getMidX(), cell.getMinY() + 19.f));
+                value->setPosition(CCPoint(cell.getMidX(), cell.getMaxY() - 43.f));
                 m_modesPane->addChild(value, 2);
                 m_modeTickValueLabels[index] = value;
             }
-            for (int which = 0; which < 2; ++which) {
-                auto rect = modeTickStepRect(index, which == 1);
-                if (auto* glyph = makeLabel(which == 1 ? "+" : "-", false, 0.62f, accentColor())) {
-                    glyph->setPosition(CCPoint(rect.getMidX(), rect.getMidY()));
+            static char const* stepText[4] = { "-5", "+5", "-", "+" };
+            for (int which = 0; which < 4; ++which) {
+                auto stepRect = modeTickStepRect(index, which);
+                if (auto* glyph = makeLabel(stepText[which], false, 0.56f, accentColor())) {
+                    fitLabelToWidth(glyph, stepRect.size.width - 6.f);
+                    glyph->setPosition(CCPoint(stepRect.getMidX(), stepRect.getMidY()));
                     m_modesPane->addChild(glyph, 2);
-                    m_modeTickBtnLabels[index * 2 + which] = glyph;
+                    m_modeTickBtnLabels[index * 4 + which] = glyph;
                 }
             }
+        }
+        if (auto* applyLabel = makeLabel("apply", true, 0.60f, accentColor())) {
+            auto applyRect = modeApplyRect();
+            fitLabelToWidth(applyLabel, applyRect.size.width - 12.f);
+            applyLabel->setPosition(CCPoint(applyRect.getMidX(), applyRect.getMidY()));
+            m_modesPane->addChild(applyLabel, 2);
+            m_modeApplyLabel = applyLabel;
         }
         if (auto* autoLabel = makeLabel("all auto", false, 0.60f, accentColor())) {
             auto rect = modeTicksAutoRect();
@@ -5094,26 +5169,46 @@ finally {
             if (m_customRemoveLabel) {
                 m_customRemoveLabel->setVisible(showStageTab && isCustomSelected);
             }
-
-            if (m_stageTimingLabels[2]) {
-                bool const overSafeTicks = isCustomSelected
-                    && (customStage->ticksAll > CUSTOM_TICKS_SAFE || customStage->ticksWave > CUSTOM_TICKS_SAFE);
-                m_stageTimingLabels[2]->setColor(overSafeTicks ? warningColor() : faintTextColor());
-                if (!state.isEnabled) {
-                    m_stageTimingLabels[2]->setString("raw input, nothing is buffered");
-                }
-                else if (overSafeTicks) {
-                    m_stageTimingLabels[2]->setString(fmt::format("warning: over {} ticks may lag or work worse than {}", CUSTOM_TICKS_SAFE, CUSTOM_TICKS_SAFE).c_str());
-                }
-                else if (isCustomSelected) {
-                    m_stageTimingLabels[2]->setString(fmt::format("tune each delay with -5 / -1 / +1 / +5, up to {} ticks", CUSTOM_TICKS_MAX).c_str());
-                }
-                else if (canAddCustom) {
-                    m_stageTimingLabels[2]->setString("tap + custom to make an editable copy of this stage");
+            drawCurvedRect(
+                m_stageTrack,
+                stageKeyRect(),
+                6.f,
+                color4(accentColor(), m_listeningStageKey ? 46 : 20),
+                color4(accentColor(), m_listeningStageKey ? 160 : 80),
+                1.f
+            );
+            if (m_stageKeyLabel) {
+                m_stageKeyLabel->setVisible(showStageTab);
+                m_stageKeyLabel->setScale(0.72f);
+                if (m_listeningStageKey) {
+                    m_stageKeyLabel->setString("listening for keypress");
                 }
                 else {
-                    m_stageTimingLabels[2]->setString("custom stage limit reached");
+                    m_stageKeyLabel->setString(fmt::format("key: {}", stageKeyText(state.stageIndex)).c_str());
                 }
+                fitLabelToWidth(m_stageKeyLabel, stageKeyRect().size.width - 14.f);
+            }
+
+            if (m_stageTimingLabels[2]) {
+                m_stageTimingLabels[2]->setColor(faintTextColor());
+                std::string stageHint;
+                if (!state.isEnabled) {
+                    stageHint = "raw input, nothing is buffered";
+                }
+                else if (isCustomSelected) {
+                    stageHint = fmt::format("tune each delay with -5 / -1 / +1 / +5, up to {} ticks", CUSTOM_TICKS_MAX);
+                }
+                else if (canAddCustom) {
+                    stageHint = "tap + custom to make an editable copy of this stage";
+                }
+                else {
+                    stageHint = "custom stage limit reached";
+                }
+                auto boundKey = stageKeyText(state.stageIndex);
+                if (!isMobileHost() && stageHint.size() + boundKey.size() < 62) {
+                    stageHint += fmt::format(" | key: {}", boundKey);
+                }
+                m_stageTimingLabels[2]->setString(stageHint.c_str());
             }
         }
 
@@ -5311,26 +5406,6 @@ finally {
         setTouchEnabled(!popupOpen && (m_isOpen || isMobileHost()));
     }
 
-    void AfterflowOverlay::showTicksWarning() {
-        if (Mod::get()->getSavedValue<bool>("ticks-warning-seen", false)) {
-            return;
-        }
-        Mod::get()->setSavedValue<bool>("ticks-warning-seen", true);
-        (void)Mod::get()->saveData();
-        std::string message = fmt::format(
-            "delays over {0} ticks may lag or work worse than {0}.\n"
-            "your game might stutter or the stage might act weird.",
-            CUSTOM_TICKS_SAFE
-        );
-        if (m_isOpen) {
-            m_hiddenForAlert = true;
-            if (m_deck) { m_deck->setVisible(false); }
-            if (m_scrim) { m_scrim->setVisible(false); }
-            setTouchEnabled(false);
-        }
-        FLAlertLayer::create(this, "warning", message, "ok i understand", nullptr)->show();
-    }
-
     void AfterflowOverlay::FLAlert_Clicked(FLAlertLayer*, bool) {
         if (!m_hiddenForAlert) {
             return;
@@ -5355,6 +5430,7 @@ finally {
         m_logLastCount = 0;
         if (!isMobileHost()) {
             setTouchEnabled(true);
+            setMouseEnabled(true);
         }
         if (m_launcher) {
             m_launcher->setVisible(false);
@@ -5390,6 +5466,14 @@ finally {
         m_logDragging = false;
         m_logDragMoved = false;
         m_isOpen = false;
+        if (m_listeningStageKey) {
+            m_listeningStageKey = false;
+            cocos2d::CCKeyboardDispatcher::get()->removeDelegate(this);
+        }
+        if (!isMobileHost()) {
+            setMouseEnabled(false);
+            setTouchEnabled(false);
+        }
         unschedule(schedule_selector(AfterflowOverlay::tickRefresh));
         unschedule(schedule_selector(AfterflowOverlay::animTick));
 
@@ -5447,7 +5531,7 @@ finally {
 
     void AfterflowOverlay::onEnter() {
         if (!isMobileHost()) {
-            setMouseEnabled(true);
+            setMouseEnabled(m_isOpen);
         }
         CCLayer::onEnter();
         layout();
@@ -5466,6 +5550,9 @@ finally {
     }
 
     void AfterflowOverlay::onExit() {
+        if (!isMobileHost()) {
+            setMouseEnabled(false);
+        }
         m_isOpen = false;
         m_didPauseForPanel = false;
         m_isDraggingLauncher = false;
@@ -5578,11 +5665,6 @@ finally {
             if (m_pressedTarget == HitTarget::TickSlider) {
                 m_draggingSlider = true;
                 m_sliderRow = stageSlot;
-                m_sliderStartedOver = false;
-                if (auto* sliderStage = customStageFor(state.stageIndex)) {
-                    int startTicks = stageSlot == 0 ? sliderStage->ticksAll : sliderStage->ticksWave;
-                    m_sliderStartedOver = startTicks > CUSTOM_TICKS_SAFE;
-                }
                 setSliderFromX(deckPoint.x);
                 return true;
             }
@@ -5731,14 +5813,6 @@ finally {
             m_sliderRow = -1;
             m_pressedTarget = HitTarget::None;
             saveCustomStages();
-            if (releasedRow >= 0 && releasedRow <= 1 && !m_sliderStartedOver) {
-                if (auto* sliderStage = customStageFor(state.stageIndex)) {
-                    int endTicks = releasedRow == 0 ? sliderStage->ticksAll : sliderStage->ticksWave;
-                    if (endTicks > CUSTOM_TICKS_SAFE) {
-                        showTicksWarning();
-                    }
-                }
-            }
             return;
         }
 
@@ -6348,14 +6422,9 @@ finally {
         if (ticks == value) {
             return;
         }
-        bool const crossedSafe = ticks <= CUSTOM_TICKS_SAFE && value > CUSTOM_TICKS_SAFE;
         ticks = value;
         saveCustomStages();
         setStageIndex(state.stageIndex);
-        if (crossedSafe) {
-            endTickEdit();
-            showTicksWarning();
-        }
     }
 
     void AfterflowOverlay::setSliderFromX(float x) {
@@ -6415,16 +6484,30 @@ finally {
         }
         if (m_activeTab == 2) {
             for (int index = 0; index < MODE_TICK_COUNT; ++index) {
-                for (int which = 0; which < 2; ++which) {
-                    if (modeTickStepRect(index, which == 1).containsPoint(point)) {
-                        if (stageSlot) { *stageSlot = index * 2 + which; }
+                for (int which = 0; which < 4; ++which) {
+                    if (modeTickStepRect(index, which).containsPoint(point)) {
+                        if (stageSlot) { *stageSlot = index * 4 + which; }
                         return HitTarget::ModeTick;
                     }
+                }
+                auto iconRect = modeTickIconRect(index);
+                CCRect iconArea(
+                    iconRect.getMinX() - 6.f,
+                    iconRect.getMinY() - 6.f,
+                    iconRect.size.width + 12.f,
+                    iconRect.size.height + 12.f
+                );
+                if (iconArea.containsPoint(point)) {
+                    if (stageSlot) { *stageSlot = index; }
+                    return HitTarget::ModeIconIgnore;
                 }
                 if (modeTickCellRect(index).containsPoint(point)) {
                     if (stageSlot) { *stageSlot = index; }
                     return HitTarget::ModeTickReset;
                 }
+            }
+            if (modeApplyRect().containsPoint(point)) {
+                return HitTarget::ModesApply;
             }
             if (modeTicksAutoRect().containsPoint(point)) {
                 return HitTarget::ModeTicksAuto;
@@ -6470,6 +6553,9 @@ finally {
             return HitTarget::Credits;
         }
         if (m_activeTab == 1) {
+            if (stageKeyRect().containsPoint(point)) {
+                return HitTarget::StageKey;
+            }
             if (customAddRect().containsPoint(point)) {
                 return HitTarget::StageAdd;
             }
@@ -6565,21 +6651,37 @@ finally {
         }
 
         if (target == HitTarget::ModeTick) {
-            int const index = m_pressedStageSlot / 2;
-            bool const plus = (m_pressedStageSlot % 2) == 1;
+            static int const modeDeltas[4] = { -5, 5, -1, 1 };
+            int const index = m_pressedStageSlot / 4;
+            int const which = m_pressedStageSlot % 4;
+            if (index < 0 || index >= MODE_TICK_COUNT || which < 0 || which >= 4) {
+                refresh();
+                return;
+            }
             int const before = modeTicksAt(index);
             int const base = before > 0 ? before : stageTicksForMode(index);
-            int const next = clampModeTicks(base + (plus ? 1 : -1));
+            int const next = clampModeTicks(base + modeDeltas[which]);
             setModeTicksAt(index, next);
-            if (before <= CUSTOM_TICKS_SAFE && next > CUSTOM_TICKS_SAFE) {
-                showTicksWarning();
-            }
+            setConfigStatus(fmt::format("{} -> {} ticks", MODE_TICK_NAMES[index], next).c_str(), true);
+            refresh();
+            return;
+        }
+
+        if (target == HitTarget::ModeIconIgnore) {
             refresh();
             return;
         }
 
         if (target == HitTarget::ModeTickReset) {
             setModeTicksAt(m_pressedStageSlot, 0);
+            refresh();
+            return;
+        }
+
+        if (target == HitTarget::ModesApply) {
+            applyStage();
+            clearQueuedPresses();
+            setConfigStatus("applied your mode delays", true);
             refresh();
             return;
         }
@@ -6645,6 +6747,15 @@ finally {
                 }
                 break;
             }
+            case HitTarget::StageKey: {
+                if (!m_listeningStageKey) {
+                    cocos2d::CCKeyboardDispatcher::get()->addDelegate(this);
+                }
+                m_listeningStageKey = true;
+                refresh();
+                say("listening for keypress for {}", stageTitleAt(state.stageIndex));
+                break;
+            }
             case HitTarget::CustomRemove: {
                 loadCustomStages();
                 int custom = state.stageIndex - STAGE_TABLE_SIZE;
@@ -6681,9 +6792,6 @@ finally {
                         saveCustomStages();
                         setStageIndex(state.stageIndex);
                         refresh();
-                        if (before <= CUSTOM_TICKS_SAFE && ticks > CUSTOM_TICKS_SAFE) {
-                            showTicksWarning();
-                        }
                     }
                 }
                 break;
@@ -8829,6 +8937,35 @@ finally {
         }
     }
 
+    void jumpToStage(int stageIndex) {
+        if (stageIndex < 0 || stageIndex >= stageTotalCount()) {
+            return;
+        }
+        if (stageIndex == state.stageIndex) {
+            return;
+        }
+        setStageIndex(stageIndex);
+        say("{} -> {}", stageKeyText(stageIndex), stageBanner());
+    }
+
+    void setupStageKeybinds() {
+        if (isMobileHost()) {
+            return;
+        }
+        for (int index = 0; index < STAGE_TABLE_SIZE + CUSTOM_STAGE_LIMIT; ++index) {
+            auto setting = stageKeySetting(index);
+            if (setting.empty()) {
+                continue;
+            }
+            listenForKeybindSettingPresses(setting, [index](Keybind const&, bool isDown, bool isRepeat, double) {
+                if (isDown && !isRepeat) {
+                    jumpToStage(index);
+                }
+                return true;
+            });
+        }
+    }
+
     void startCycleWatcher() {
         std::error_code errorCode;
         std::filesystem::remove(cycleTriggerPath(), errorCode);
@@ -9061,6 +9198,7 @@ $on_mod(Loaded) {
         startCycleWatcher();
     }
     setupKeybinds();
+    setupStageKeybinds();
     AFTERFLOW_PHASE("keybinds ready");
     static auto sceneListener = SceneEvent().listen([](CCScene* scene) {
         attachAfterflowOverlay(scene);
