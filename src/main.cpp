@@ -1893,6 +1893,53 @@ finally {
         return true;
     }
 
+    std::string tagUrlFor(std::string const& version, bool withPrefix) {
+        return fmt::format("{}{}{}", RELEASE_URL_PREFIX, withPrefix ? "v" : "", version);
+    }
+
+    bool tagPageExists(web::WebResponse const& response) {
+        auto code = response.code();
+        return code != 0 && code != 404;
+    }
+
+    void announceUpdate(bool isLoud, std::string const& installedVersion, std::string const& latestVersion) {
+        auto updateUrlText = fmt::format("{}{}", RELEASE_URL_PREFIX, latestVersion);
+        say("out of date: v{} installed, latest is {}", installedVersion, latestVersion);
+        say("update at {}", updateUrlText);
+        log::warn("afterflow is out of date: v{} installed, latest is {}", installedVersion, latestVersion);
+        log::warn("update at {}", updateUrlText);
+
+        pendingUpdateNotice.installedVersion = installedVersion;
+        pendingUpdateNotice.latestVersion = latestVersion;
+        pendingUpdateNotice.urlText = updateUrlText;
+        showUpdatePopup();
+    }
+
+    void checkUpdateTag(bool isLoud, std::string const& installedVersion, std::string const& latestVersion) {
+        async::spawn(
+            web::WebRequest().get(tagUrlFor(latestVersion, false)),
+            [isLoud, installedVersion, latestVersion](web::WebResponse plainResponse) {
+                if (tagPageExists(plainResponse)) {
+                    announceUpdate(isLoud, installedVersion, latestVersion);
+                    return;
+                }
+                async::spawn(
+                    web::WebRequest().get(tagUrlFor(latestVersion, true)),
+                    [isLoud, installedVersion, latestVersion](web::WebResponse prefixedResponse) {
+                        if (tagPageExists(prefixedResponse)) {
+                            announceUpdate(isLoud, installedVersion, latestVersion);
+                            return;
+                        }
+                        if (isLoud) {
+                            say("version check: v{} is in version.txt but the tag is not pushed yet, not showing an update", latestVersion);
+                        }
+                        log::info("afterflow update held back, no tag for v{} yet", latestVersion);
+                    }
+                );
+            }
+        );
+    }
+
     void checkForUpdates(bool isLoud) {
         static bool hasChecked = false;
         static auto lastCheckTime = std::chrono::steady_clock::now() - std::chrono::minutes(11);
@@ -1937,16 +1984,7 @@ finally {
                     return;
                 }
 
-                auto updateUrlText = fmt::format("{}{}", RELEASE_URL_PREFIX, latestVersion);
-                say("out of date: v{} installed, latest is {}", installedVersion, latestVersion);
-                say("update at {}", updateUrlText);
-                log::warn("afterflow is out of date: v{} installed, latest is {}", installedVersion, latestVersion);
-                log::warn("update at {}", updateUrlText);
-
-                pendingUpdateNotice.installedVersion = installedVersion;
-                pendingUpdateNotice.latestVersion = latestVersion;
-                pendingUpdateNotice.urlText = updateUrlText;
-                showUpdatePopup();
+                checkUpdateTag(isLoud, installedVersion, latestVersion);
             }
         );
     }
