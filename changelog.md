@@ -1,4 +1,8 @@
 # v2.2.6-beta
+- **fix: input.** wave clicks go through the buffer again. the 2.2.6 bypass that handed them straight to the game is gone, so wave no longer plays like the mod is switched off.
+- **fix: input.** queued clicks are delivered from the player update again, the same place 2.2.5 delivered them. 2.2.6 moved delivery into the base layer update, which runs at a different point in the frame, so every delivered click came out one frame off.
+- **fix: input.** the prediction budget is capped at 4 ms and defaults to 3 ms. it used to be 8 ms multiplied by the frame scale, up to 24 ms per click at 60fps, so a single click could stall the game for a frame and a half.
+- wave ignores the modes tab tile and keeps using the stage ticks.
 
 - bumped version to `2.2.6-beta` (mod.json, version.txt). CMakeLists.txt stays numeric at `2.2.6` because CMake's `project(VERSION)` rejects prerelease tags.
 - [ios] the built dylib is ad-hoc signed after linking, so launchers that refuse unsigned mods no longer stop it with a missing code signature.
