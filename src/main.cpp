@@ -9842,6 +9842,12 @@ class $modify(BufPlayerObject, PlayerObject) {
         auto* gameLayer = GameManager::get()->m_playLayer;
         if (gameLayer && this == gameLayer->m_player1 && !gameLayer->m_isPaused) {
             ++currentTick;
+            if (state.isEnabled) {
+                // v2.2.5 delivered here, immediately before this player stepped, 2.2.6 moved it to the base
+                // layer update which runs at a different point in the frame, so every delivered click came
+                // out one frame off, that is the ordering that felt late
+                flushHeldPress(gameLayer, this);
+            }
         }
 
         bool isFirstPlayer = gameLayer && this == gameLayer->m_player1;
@@ -10040,11 +10046,6 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         if (!state.isSimulating) {
             g_trackedGround1 = this->m_player1;
             g_trackedGround2 = this->m_player2;
-            if (state.isEnabled) {
-                if (auto* playLayer = typeinfo_cast<PlayLayer*>(this); playLayer && !playLayer->m_isPaused) {
-                    flushHeldPress(playLayer, playLayer->m_player1);
-                }
-            }
             ensureLiveGroundPointer(this->m_player1);
             ensureLiveGroundPointer(this->m_player2);
         }
