@@ -3493,7 +3493,7 @@ finally {
         return best;
     }
 
-    class AfterflowOverlay : public CCLayer, public FLAlertLayerProtocol, public cocos2d::CCKeyboardDelegate {
+    class AfterflowOverlay : public CCLayer, public FLAlertLayerProtocol {
     public:
         static AfterflowOverlay* create();
         bool init() override;
@@ -7727,6 +7727,7 @@ finally {
         if (!pointer) {
             return false;
         }
+#ifdef GEODE_IS_WINDOWS
         void* vtable = dictionaryVtable();
         if (!vtable) {
             return false;
@@ -7736,6 +7737,9 @@ finally {
             return false;
         }
         return actual == vtable;
+#else
+        return true;
+#endif
     }
 
     CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary) {
@@ -7779,6 +7783,9 @@ finally {
         if (!objectPointer) {
             return "null";
         }
+#ifndef GEODE_IS_WINDOWS
+        return "unknown";
+#else
         void* vtable = nullptr;
         if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
             return "unreadable";
@@ -7798,6 +7805,7 @@ finally {
             text += fmt::format(" id{}", gameObject->m_objectID);
         }
         return text;
+#endif
     }
 
     std::string playerLogLabel(CCDictionary* dictionary) {
@@ -7829,6 +7837,7 @@ finally {
     }
 
     void* ccobjectVtable() {
+#ifdef GEODE_IS_WINDOWS
         static void* cachedVtable = nullptr;
         if (!cachedVtable) {
             if (HMODULE module = GetModuleHandleW(L"libcocos2d.dll")) {
@@ -7836,12 +7845,18 @@ finally {
             }
         }
         return cachedVtable;
+#else
+        return nullptr;
+#endif
     }
 
     bool isDeadCocosObject(void* objectPointer) {
         if (!objectPointer) {
             return false;
         }
+#ifndef GEODE_IS_WINDOWS
+        return false;
+#else
         void* vtable = nullptr;
         if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
             return true;
@@ -7853,12 +7868,16 @@ finally {
         HMODULE module = nullptr;
         return !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             reinterpret_cast<LPCWSTR>(vtable), &module);
+#endif
     }
 
     bool isGameObjectPointer(void* objectPointer) {
         if (!objectPointer) {
             return false;
         }
+#ifndef GEODE_IS_WINDOWS
+        return true;
+#else
         void* vtable = nullptr;
         if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
             return false;
@@ -7871,6 +7890,7 @@ finally {
         wchar_t path[MAX_PATH] = {};
         GetModuleFileNameW(module, path, MAX_PATH);
         return std::filesystem::path(path).filename().string() == "GeometryDash.exe";
+#endif
     }
 
     void pruneDictionaryEntries(CCDictionary* dictionary, std::string const& logName, bool requireGameObject) {
