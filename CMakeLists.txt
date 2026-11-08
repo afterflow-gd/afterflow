@@ -11,7 +11,7 @@ if (APPLE)
 endif()
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(Afterflow VERSION 2.2.6)
+project(Afterflow VERSION 2.2.7)
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 
