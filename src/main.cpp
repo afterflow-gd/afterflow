@@ -7343,15 +7343,15 @@ finally {
                 g_layerChildCounts.push_back({ parentNode, parentNode->getChildrenCount() });
             }
         };
+        // the per object scan below used to record a child count for every single object in the level,
+        // and prunePredictionNodes then walked that whole list calling getChildren() on each entry, so a
+        // level with ten thousand objects cost ten thousand array pushes plus ten thousand lookups on
+        // every candidate click, only these top containers can actually receive a prediction node, so the
+        // scan is gone and the prune is three lookups
         addParent(gameLayer);
         addParent(gameLayer->m_objectLayer);
         if (gameLayer->m_aboveShaderObjectLayer != gameLayer->m_objectLayer) {
             addParent(gameLayer->m_aboveShaderObjectLayer);
-        }
-        if (gameLayer->m_objectLayer && gameLayer->m_objectLayer->getChildren()) {
-            for (auto* child : CCArrayExt<CCNode*>(gameLayer->m_objectLayer->getChildren())) {
-                addParent(child);
-            }
         }
     }
 
