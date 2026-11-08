@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - v2.2.6-beta
 
 permissions:
   contents: read
@@ -69,6 +70,9 @@ jobs:
 
       - name: Verify the package is readable on ios
         run: python3 tools/check-geode-compression.py "${{ steps.build.outputs.build-output }}"
+
+      - name: Verify the package contains every platform binary
+        run: python3 tools/check-geode-platforms.py "${{ steps.build.outputs.build-output }}"
 
       - uses: actions/upload-artifact@v4
         with:

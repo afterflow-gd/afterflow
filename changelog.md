@@ -5,6 +5,7 @@
 - [ios] the eight ghost-visual player effects (spawn flash, streaks, spider run, rotations) are left out on iOS, where they crash Geode's no-JIT helper on the loading screen. prediction is unaffected and other platforms keep them.
 - [hardening] startup breadcrumbs now also mark settings, keybinds, listeners, menu init and menu scheduling.
 - [android] buffer setup now skips invalid ghost players and collision logs instead of dereferencing them; if the ghost players cannot be created, buffering is disabled for that level instead of crashing.
+- [ios] the overlay and launcher now hide while a GD popup is open, including the editor color picker, so popups are never covered and keep their own touch handling.
 - [hardening] startup breadcrumbs now log the build version and the type of the first scene the panel is built on, so a crash report identifies the exact build and scene.
 - [hardening] the update-progress overlay and the panel toggle now skip building while a scene transition (`CCTransitionScene`) is running, so the panel is never parented into a transition's subtree.
 - [hardening] ghost players are now dropped when the play layer leaves the scene (`PlayLayer::onExit`), not only on quit, so they are released before the play layer is destroyed.
