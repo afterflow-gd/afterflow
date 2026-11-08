@@ -20,6 +20,7 @@
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
+#include <Geode/modify/CCDictionary.hpp>
 #include <Geode/modify/RingObject.hpp>
 #include <algorithm>
 #include <cctype>
@@ -150,6 +151,7 @@ namespace {
     constexpr int CUSTOM_TICKS_MIN = 1;
     constexpr int CUSTOM_TICKS_MAX = 240;
     constexpr int CUSTOM_TICKS_SAFE = 120;
+    constexpr int MODE_TICKS_MAX = 60;
     constexpr int MODE_TICK_COUNT = 8;
     constexpr char const* MODE_TICK_NAMES[MODE_TICK_COUNT] = {
         "cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing"
@@ -231,7 +233,7 @@ namespace {
     bool g_modeTicksLoaded = false;
 
     int clampModeTicks(int value) {
-        return std::clamp(value, 0, CUSTOM_TICKS_MAX);
+        return std::clamp(value, 0, MODE_TICKS_MAX);
     }
 
     void loadModeTicks() {
@@ -323,6 +325,7 @@ namespace {
         bool isActivatedByEffect;
         bool byPlayer1;
         bool byPlayer2;
+        bool animationTriggered;
     };
 
     struct ProbeOrb {
@@ -2301,11 +2304,11 @@ finally {
 #endif
     }
 
-    bool isGhost(PlayerObject* playerObject) {
+    bool isSimulatedGhost(PlayerObject* playerObject) {
         return playerObject && (playerObject == state.ghostPlayer1 || playerObject == state.ghostPlayer2);
     }
 
-    void resetPending() {
+    void clearQueuedPresses() {
         state.queuedInputs.clear();
         state.inputShiftTicks = 0;
         state.releaseShiftTicks = 0;
@@ -7094,7 +7097,7 @@ finally {
         }
     }
 
-    void dropGhosts() {
+    void retireGhostPlayers() {
         for (auto** ghostSlot : { &state.ghostPlayer1, &state.ghostPlayer2 }) {
             if (*ghostSlot) {
                 (*ghostSlot)->removeFromParentAndCleanup(true);
@@ -7113,10 +7116,10 @@ finally {
         state.wasAutoReleased = false;
         state.ghostLayerBaseIndex = 0;
         state.pathDrawNode = nullptr;
-        resetPending();
+        clearQueuedPresses();
     }
 
-    PlayerObject* makeGhost(PlayLayer* gameLayer) {
+    PlayerObject* createGhostPlayer(PlayLayer* gameLayer) {
         if (!state.ghostRenderLayer) {
             state.ghostRenderLayer = CCLayer::create();
             if (!state.ghostRenderLayer) {
@@ -7138,21 +7141,50 @@ finally {
         return ghostPlayer;
     }
 
-    void forgetGhostEffect(PlayerObject* ghostPlayer, CCNode* node) {
-        if (!ghostPlayer || !node) {
-            return;
+    template <class NodeType>
+    void clearNodeSlot(NodeType*& slot, void* goneNode) {
+        if (slot && reinterpret_cast<void*>(slot) == goneNode) {
+            slot = nullptr;
         }
-        if (ghostPlayer->m_trailingParticles == node) { ghostPlayer->m_trailingParticles = nullptr; }
-        if (ghostPlayer->m_shipClickParticles == node) { ghostPlayer->m_shipClickParticles = nullptr; }
-        if (ghostPlayer->m_dashParticles == node) { ghostPlayer->m_dashParticles = nullptr; }
-        if (ghostPlayer->m_dashFireSprite == node) { ghostPlayer->m_dashFireSprite = nullptr; }
-        if (ghostPlayer->m_dashSpritesContainer == node) { ghostPlayer->m_dashSpritesContainer = nullptr; }
-        if (ghostPlayer->m_shipStreak == node) { ghostPlayer->m_shipStreak = nullptr; }
-        if (ghostPlayer->m_ghostTrail == node) { ghostPlayer->m_ghostTrail = nullptr; }
-        if (ghostPlayer->m_dashRing == node) { ghostPlayer->m_dashRing = nullptr; }
     }
 
-    void sweepGhostLayer() {
+    void detachGhostNodeSlot(PlayerObject* ghostPlayer, CCNode* ghostNode) {
+        if (!ghostPlayer || !ghostNode) {
+            return;
+        }
+        void* goneNode = ghostNode;
+        clearNodeSlot(ghostPlayer->m_playerGroundParticles, goneNode);
+        clearNodeSlot(ghostPlayer->m_trailingParticles, goneNode);
+        clearNodeSlot(ghostPlayer->m_shipClickParticles, goneNode);
+        clearNodeSlot(ghostPlayer->m_vehicleGroundParticles, goneNode);
+        clearNodeSlot(ghostPlayer->m_ufoClickParticles, goneNode);
+        clearNodeSlot(ghostPlayer->m_robotBurstParticles, goneNode);
+        clearNodeSlot(ghostPlayer->m_dashParticles, goneNode);
+        clearNodeSlot(ghostPlayer->m_swingBurstParticles1, goneNode);
+        clearNodeSlot(ghostPlayer->m_swingBurstParticles2, goneNode);
+        clearNodeSlot(ghostPlayer->m_landParticles0, goneNode);
+        clearNodeSlot(ghostPlayer->m_landParticles1, goneNode);
+        clearNodeSlot(ghostPlayer->m_dashFireSprite, goneNode);
+        clearNodeSlot(ghostPlayer->m_dashSpritesContainer, goneNode);
+        clearNodeSlot(ghostPlayer->m_regularTrail, goneNode);
+        clearNodeSlot(ghostPlayer->m_shipStreak, goneNode);
+        clearNodeSlot(ghostPlayer->m_waveTrail, goneNode);
+        clearNodeSlot(ghostPlayer->m_ghostTrail, goneNode);
+        clearNodeSlot(ghostPlayer->m_swingFireMiddle, goneNode);
+        clearNodeSlot(ghostPlayer->m_swingFireBottom, goneNode);
+        clearNodeSlot(ghostPlayer->m_swingFireTop, goneNode);
+        clearNodeSlot(ghostPlayer->m_dashRing, goneNode);
+        if (ghostPlayer->m_particleSystems) {
+            auto* particleList = ghostPlayer->m_particleSystems;
+            for (int slotIndex = static_cast<int>(particleList->count()) - 1; slotIndex >= 0; --slotIndex) {
+                if (reinterpret_cast<void*>(particleList->objectAtIndex(slotIndex)) == goneNode) {
+                    particleList->removeObjectAtIndex(slotIndex);
+                }
+            }
+        }
+    }
+
+    void clearGhostScenery() {
         if (!state.ghostRenderLayer) {
             return;
         }
@@ -7162,20 +7194,74 @@ finally {
             if (!childNode || typeinfo_cast<PlayerObject*>(childNode)) {
                 break;
             }
-            forgetGhostEffect(state.ghostPlayer1, childNode);
-            forgetGhostEffect(state.ghostPlayer2, childNode);
+            childNode->retain();
+            detachGhostNodeSlot(state.ghostPlayer1, childNode);
+            detachGhostNodeSlot(state.ghostPlayer2, childNode);
+            if (auto* manager = GameManager::get()) {
+                if (auto* playLayer = manager->m_playLayer) {
+                    if (playLayer->m_player1 != state.ghostPlayer1) {
+                        detachGhostNodeSlot(playLayer->m_player1, childNode);
+                    }
+                    if (playLayer->m_player2 && playLayer->m_player2 != state.ghostPlayer2) {
+                        detachGhostNodeSlot(playLayer->m_player2, childNode);
+                    }
+                }
+            }
             state.ghostRenderLayer->removeChild(childNode, true);
+            childNode->release();
         }
     }
 
-    void sendButton(PlayLayer* gameLayer, bool isDown) {
+    struct LayerChildCount {
+        CCNode* parentNode;
+        unsigned childCount;
+    };
+
+    std::vector<LayerChildCount> g_layerChildCounts;
+
+    PlayerObject* g_trackedGround1 = nullptr;
+    PlayerObject* g_trackedGround2 = nullptr;
+
+    void recordLayerChildCounts(PlayLayer* gameLayer) {
+        g_layerChildCounts.clear();
+        if (!gameLayer) {
+            return;
+        }
+        auto addParent = [](CCNode* parentNode) {
+            if (parentNode) {
+                g_layerChildCounts.push_back({ parentNode, parentNode->getChildrenCount() });
+            }
+        };
+        addParent(gameLayer);
+        addParent(gameLayer->m_objectLayer);
+        if (gameLayer->m_aboveShaderObjectLayer != gameLayer->m_objectLayer) {
+            addParent(gameLayer->m_aboveShaderObjectLayer);
+        }
+        if (gameLayer->m_objectLayer && gameLayer->m_objectLayer->getChildren()) {
+            for (auto* child : CCArrayExt<CCNode*>(gameLayer->m_objectLayer->getChildren())) {
+                addParent(child);
+            }
+        }
+    }
+
+    void prunePredictionNodes() {
+        for (auto const& recorded : g_layerChildCounts) {
+            auto* childList = recorded.parentNode->getChildren();
+            while (childList && childList->count() > recorded.childCount) {
+                recorded.parentNode->removeChild(static_cast<CCNode*>(childList->lastObject()), true);
+            }
+        }
+        g_layerChildCounts.clear();
+    }
+
+    void forwardPressToGame(PlayLayer* gameLayer, bool isDown) {
         state.isInjecting = true;
         state.hasAppliedInput = isDown;
         gameLayer->handleButton(isDown, 1, state.isFirstPlayer);
         state.isInjecting = false;
     }
 
-    void pressGhost(PlayerObject* ghostPlayer, bool isDown) {
+    void applyGhostPress(PlayerObject* ghostPlayer, bool isDown) {
         (ghostPlayer == state.ghostPlayer1 ? state.isHeld1 : state.isHeld2) = isDown;
         if (isDown) {
             ghostPlayer->pushButton(PlayerButton::Jump);
@@ -7185,10 +7271,108 @@ finally {
         }
     }
 
-    void copyState(PlayerObject* ghostPlayer, PlayerObject* realPlayer) {
+    void* dictionaryVtable();
+    bool isDictionaryPointer(void* pointer);
+    CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary);
+
+    void mirrorStateIntoGhost(PlayerObject* ghostPlayer, PlayerObject* realPlayer) {
         ghostPlayer->setVisible(false);
         ghostPlayer->resetTouchedRings(true);
+#define AFTERFLOW_KEEP(field) auto* own_##field = ghostPlayer->field
+#define AFTERFLOW_RESTORE(field) if (ghostPlayer->field != own_##field) { ghostPlayer->field = own_##field; ++replacedFieldCount; }
+        int replacedFieldCount = 0;
+        AFTERFLOW_KEEP(m_collisionLogTop);
+        AFTERFLOW_KEEP(m_collisionLogBottom);
+        AFTERFLOW_KEEP(m_collisionLogLeft);
+        AFTERFLOW_KEEP(m_collisionLogRight);
+        AFTERFLOW_KEEP(m_particleSystems);
+        AFTERFLOW_KEEP(m_playerGroundParticles);
+        AFTERFLOW_KEEP(m_trailingParticles);
+        AFTERFLOW_KEEP(m_shipClickParticles);
+        AFTERFLOW_KEEP(m_vehicleGroundParticles);
+        AFTERFLOW_KEEP(m_ufoClickParticles);
+        AFTERFLOW_KEEP(m_robotBurstParticles);
+        AFTERFLOW_KEEP(m_dashParticles);
+        AFTERFLOW_KEEP(m_swingBurstParticles1);
+        AFTERFLOW_KEEP(m_swingBurstParticles2);
+        AFTERFLOW_KEEP(m_landParticles0);
+        AFTERFLOW_KEEP(m_landParticles1);
+        AFTERFLOW_KEEP(m_dashFireSprite);
+        AFTERFLOW_KEEP(m_dashSpritesContainer);
+        AFTERFLOW_KEEP(m_regularTrail);
+        AFTERFLOW_KEEP(m_shipStreak);
+        AFTERFLOW_KEEP(m_waveTrail);
+        AFTERFLOW_KEEP(m_ghostTrail);
+        AFTERFLOW_KEEP(m_swingFireMiddle);
+        AFTERFLOW_KEEP(m_swingFireBottom);
+        AFTERFLOW_KEEP(m_swingFireTop);
+        AFTERFLOW_KEEP(m_dashRing);
         ghostPlayer->copyAttributes(realPlayer);
+        AFTERFLOW_RESTORE(m_collisionLogTop);
+        AFTERFLOW_RESTORE(m_collisionLogBottom);
+        AFTERFLOW_RESTORE(m_collisionLogLeft);
+        AFTERFLOW_RESTORE(m_collisionLogRight);
+        ghostPlayer->m_collisionLogTop = keepGhostCollisionLog(ghostPlayer->m_collisionLogTop);
+        ghostPlayer->m_collisionLogBottom = keepGhostCollisionLog(ghostPlayer->m_collisionLogBottom);
+        ghostPlayer->m_collisionLogLeft = keepGhostCollisionLog(ghostPlayer->m_collisionLogLeft);
+        ghostPlayer->m_collisionLogRight = keepGhostCollisionLog(ghostPlayer->m_collisionLogRight);
+        AFTERFLOW_RESTORE(m_particleSystems);
+        AFTERFLOW_RESTORE(m_playerGroundParticles);
+        AFTERFLOW_RESTORE(m_trailingParticles);
+        AFTERFLOW_RESTORE(m_shipClickParticles);
+        AFTERFLOW_RESTORE(m_vehicleGroundParticles);
+        AFTERFLOW_RESTORE(m_ufoClickParticles);
+        AFTERFLOW_RESTORE(m_robotBurstParticles);
+        AFTERFLOW_RESTORE(m_dashParticles);
+        AFTERFLOW_RESTORE(m_swingBurstParticles1);
+        AFTERFLOW_RESTORE(m_swingBurstParticles2);
+        AFTERFLOW_RESTORE(m_landParticles0);
+        AFTERFLOW_RESTORE(m_landParticles1);
+        AFTERFLOW_RESTORE(m_dashFireSprite);
+        AFTERFLOW_RESTORE(m_dashSpritesContainer);
+        AFTERFLOW_RESTORE(m_regularTrail);
+        AFTERFLOW_RESTORE(m_shipStreak);
+        AFTERFLOW_RESTORE(m_waveTrail);
+        AFTERFLOW_RESTORE(m_ghostTrail);
+        AFTERFLOW_RESTORE(m_swingFireMiddle);
+        AFTERFLOW_RESTORE(m_swingFireBottom);
+        AFTERFLOW_RESTORE(m_swingFireTop);
+        AFTERFLOW_RESTORE(m_dashRing);
+        if (replacedFieldCount > 0) {
+            static bool reportedSharedNodes = false;
+            if (!reportedSharedNodes) {
+                reportedSharedNodes = true;
+                log::warn("afterflow: copyAttributes replaced {} ghost node pointers with the real player's, restored the ghost ones", replacedFieldCount);
+            }
+        }
+#undef AFTERFLOW_KEEP
+#undef AFTERFLOW_RESTORE
+        {
+            static bool loggedGhostProbe = false;
+            if (!loggedGhostProbe) {
+                loggedGhostProbe = true;
+                log::info(
+                    "afterflow probe: ghost={} real={} samePlayer={} logTop shared={} particleSystems shared={} ghostParent={} realParent={}",
+                    static_cast<void*>(ghostPlayer),
+                    static_cast<void*>(realPlayer),
+                    ghostPlayer == realPlayer,
+                    ghostPlayer->m_collisionLogTop == realPlayer->m_collisionLogTop,
+                    ghostPlayer->m_particleSystems == realPlayer->m_particleSystems,
+                    static_cast<void*>(ghostPlayer->getParent()),
+                    static_cast<void*>(realPlayer->getParent())
+                );
+                log::info("afterflow probe logs: ghost {} {} {} {} real {} {} {} {}",
+                    static_cast<void*>(ghostPlayer->m_collisionLogTop),
+                    static_cast<void*>(ghostPlayer->m_collisionLogBottom),
+                    static_cast<void*>(ghostPlayer->m_collisionLogLeft),
+                    static_cast<void*>(ghostPlayer->m_collisionLogRight),
+                    static_cast<void*>(realPlayer->m_collisionLogTop),
+                    static_cast<void*>(realPlayer->m_collisionLogBottom),
+                    static_cast<void*>(realPlayer->m_collisionLogLeft),
+                    static_cast<void*>(realPlayer->m_collisionLogRight)
+                );
+            }
+        }
         ghostPlayer->m_playEffects = false;
         ghostPlayer->setScale(realPlayer->getScale());
         ghostPlayer->setContentSize(realPlayer->getContentSize());
@@ -7290,7 +7474,11 @@ finally {
 
         ghostPlayer->m_lastGroundObject = realPlayer->m_lastGroundObject;
         ghostPlayer->m_preLastGroundObject = realPlayer->m_preLastGroundObject;
-        ghostPlayer->m_maybeLastGroundObject = realPlayer->m_maybeLastGroundObject;
+        // GD stores this exact pointer in the collision logDictionary dictionaries (storeCollision does
+        // setObject(m_maybeLastGroundObject, id)), which retains it. Sharing the real player's
+        // pointer means a ghost step can retain and then release a level object from the wrong
+        // player; point the copy at the ghost itself, which is always alive while simulating.
+        ghostPlayer->m_maybeLastGroundObject = ghostPlayer;
         ghostPlayer->m_collidedObject = realPlayer->m_collidedObject;
         ghostPlayer->m_objectSnappedTo = realPlayer->m_objectSnappedTo;
         ghostPlayer->m_snapDistance = realPlayer->m_snapDistance;
@@ -7334,7 +7522,7 @@ finally {
         return playerObject->m_isRobot ? InputKind::Robot : InputKind::Tap;
     }
 
-    void recordRealInput(bool isDown, PlayerObject* player1) {
+    void logRealInputPress(bool isDown, PlayerObject* player1) {
         if (isDown) {
             lastPressTick = currentTick;
             lastPressKind = kindOf(player1);
@@ -7355,15 +7543,15 @@ finally {
         }
     }
 
-    void forgetPress() {
+    void dropHeldPress() {
         lastPressTick = -1;
     }
 
-    int holdEstimate() {
+    int estimateHoldTicks() {
         return tapHoldHistory.pick(st(12), 50);
     }
 
-    void snapshotObject(GameObject* gameObject) {
+    void rememberObjectState(GameObject* gameObject) {
         if (!gameObject || state.simulationUsedObjects.contains(gameObject)) {
             return;
         }
@@ -7374,17 +7562,20 @@ finally {
             snapshot.isActivatedByEffect = effectObject->m_activated;
             snapshot.byPlayer1 = effectObject->m_activatedByPlayer1;
             snapshot.byPlayer2 = effectObject->m_activatedByPlayer2;
+            snapshot.animationTriggered = effectObject->m_animationTriggered;
         }
         state.objectSnapshots.push_back(snapshot);
     }
 
-    void restoreObjects() {
+    void reassertObjectStates() {
+        prunePredictionNodes();
         for (auto const& snapshot : state.objectSnapshots) {
             snapshot.gameObject->m_isActivated = snapshot.isObjectActivated;
             if (snapshot.effectObject) {
                 snapshot.effectObject->m_activated = snapshot.isActivatedByEffect;
                 snapshot.effectObject->m_activatedByPlayer1 = snapshot.byPlayer1;
                 snapshot.effectObject->m_activatedByPlayer2 = snapshot.byPlayer2;
+                snapshot.effectObject->m_animationTriggered = snapshot.animationTriggered;
             }
         }
         state.objectSnapshots.clear();
@@ -7409,18 +7600,237 @@ finally {
         ghostPlayer->updateRotation(deltaTime);
     }
 
+    std::unordered_set<CCDictionary*> g_seenGhostLogs;
+    int g_badLogPointers = 0;
+
+    void* dictionaryVtable() {
+        static void* cachedVtable = nullptr;
+        if (!cachedVtable) {
+            auto* sample = CCDictionary::create();
+            if (sample) {
+                cachedVtable = *reinterpret_cast<void**>(sample);
+                sample->release();
+            }
+        }
+        return cachedVtable;
+    }
+
+    bool isDictionaryPointer(void* pointer) {
+        if (!pointer) {
+            return false;
+        }
+        void* vtable = dictionaryVtable();
+        if (!vtable) {
+            return false;
+        }
+        void* actual = nullptr;
+        if (!ReadProcessMemory(GetCurrentProcess(), pointer, &actual, sizeof(actual), nullptr)) {
+            return false;
+        }
+        return actual == vtable;
+    }
+
+    CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary) {
+        if (!logDictionary) {
+            return nullptr;
+        }
+        if (isDictionaryPointer(logDictionary)) {
+            return logDictionary;
+        }
+        if (++g_badLogPointers <= 4) {
+            log::warn("afterflow: ghost collision log {} is not a dictionary, dropping the stale pointer instead of clearing it", static_cast<void*>(logDictionary));
+        }
+        return nullptr;
+    }
+
     void clearCollisionLog(CCDictionary* log) {
-        if (log) {
+        if (log && isDictionaryPointer(log)) {
+            if (g_seenGhostLogs.insert(log).second) {
+                log::info("afterflow: ghost collision log {} first cleared with {} entries", static_cast<void*>(log), log->count());
+            }
             log->removeAllObjects();
         }
     }
 
+    int logCount(CCDictionary* log) {
+        return log && isDictionaryPointer(log) ? static_cast<int>(log->count()) : -1;
+    }
+
+    std::string collisionCounts(PlayerObject* playerObject) {
+        if (!playerObject) {
+            return "none";
+        }
+        return fmt::format("top{} bottom{} left{} right{}",
+            logCount(playerObject->m_collisionLogTop),
+            logCount(playerObject->m_collisionLogBottom),
+            logCount(playerObject->m_collisionLogLeft),
+            logCount(playerObject->m_collisionLogRight));
+    }
+
+    std::string pointerClass(void* objectPointer) {
+        if (!objectPointer) {
+            return "null";
+        }
+        void* vtable = nullptr;
+        if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
+            return "unreadable";
+        }
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(vtable), &module) || !module) {
+            return "no module";
+        }
+        wchar_t path[MAX_PATH] = {};
+        GetModuleFileNameW(module, path, MAX_PATH);
+        uintptr_t offset = reinterpret_cast<uintptr_t>(vtable) - reinterpret_cast<uintptr_t>(module);
+        std::string name = std::filesystem::path(path).filename().string();
+        std::string text = fmt::format("{}+0x{:X}", name, offset);
+        if (name == "GeometryDash.exe") {
+            auto* gameObject = reinterpret_cast<GameObject*>(objectPointer);
+            text += fmt::format(" id{}", gameObject->m_objectID);
+        }
+        return text;
+    }
+
+    std::string playerLogLabel(CCDictionary* dictionary) {
+        auto* gameLayer = PlayLayer::get();
+        if (!gameLayer || !dictionary) {
+            return {};
+        }
+        PlayerObject* players[2] = { gameLayer->m_player1, gameLayer->m_player2 };
+        char const* playerNames[2] = { "player1", "player2" };
+        for (int playerIndex = 0; playerIndex < 2; ++playerIndex) {
+            auto* player = players[playerIndex];
+            if (!player) {
+                continue;
+            }
+            if (dictionary == player->m_collisionLogTop) {
+                return fmt::format("{}.top", playerNames[playerIndex]);
+            }
+            if (dictionary == player->m_collisionLogBottom) {
+                return fmt::format("{}.bottom", playerNames[playerIndex]);
+            }
+            if (dictionary == player->m_collisionLogLeft) {
+                return fmt::format("{}.left", playerNames[playerIndex]);
+            }
+            if (dictionary == player->m_collisionLogRight) {
+                return fmt::format("{}.right", playerNames[playerIndex]);
+            }
+        }
+        return {};
+    }
+
+    void* ccobjectVtable() {
+        static void* cachedVtable = nullptr;
+        if (!cachedVtable) {
+            if (HMODULE module = GetModuleHandleW(L"libcocos2d.dll")) {
+                cachedVtable = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(module) + 0xE65C0);
+            }
+        }
+        return cachedVtable;
+    }
+
+    bool isDeadCocosObject(void* objectPointer) {
+        if (!objectPointer) {
+            return false;
+        }
+        void* vtable = nullptr;
+        if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
+            return true;
+        }
+        void* freedVtable = ccobjectVtable();
+        if (freedVtable && vtable == freedVtable) {
+            return true;
+        }
+        HMODULE module = nullptr;
+        return !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(vtable), &module);
+    }
+
+    bool isGameObjectPointer(void* objectPointer) {
+        if (!objectPointer) {
+            return false;
+        }
+        void* vtable = nullptr;
+        if (!ReadProcessMemory(GetCurrentProcess(), objectPointer, &vtable, sizeof(vtable), nullptr) || !vtable) {
+            return false;
+        }
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(vtable), &module) || !module) {
+            return false;
+        }
+        wchar_t path[MAX_PATH] = {};
+        GetModuleFileNameW(module, path, MAX_PATH);
+        return std::filesystem::path(path).filename().string() == "GeometryDash.exe";
+    }
+
+    void pruneDictionaryEntries(CCDictionary* dictionary, std::string const& logName, bool requireGameObject) {
+        int const pendingEntries = static_cast<int>(dictionary->count());
+        if (pendingEntries <= 0) {
+            return;
+        }
+        std::string remarks;
+        int prunedCount = 0;
+        auto* keyObjects = dictionary->allKeys();
+        if (keyObjects) {
+            int const maxShown = std::min<int>(static_cast<int>(keyObjects->count()), 16);
+            for (int index = 0; index < maxShown; ++index) {
+                auto* keyObject = keyObjects->objectAtIndex(index);
+                auto* keyAsInteger = typeinfo_cast<CCInteger*>(keyObject);
+                if (!keyAsInteger) {
+                    continue;
+                }
+                intptr_t entryKey = static_cast<intptr_t>(keyAsInteger->getValue());
+                auto* entryValue = dictionary->objectForKey(entryKey);
+                bool const isStale = isDeadCocosObject(entryValue) || (requireGameObject && !isGameObjectPointer(entryValue));
+                if (!isStale) {
+                    continue;
+                }
+                ++prunedCount;
+                if (!remarks.empty()) {
+                    remarks += " ";
+                }
+                remarks += fmt::format("[k{} -> {} dropped]", entryKey, static_cast<void*>(entryValue));
+                dictionary->removeObjectForKey(entryKey);
+            }
+        }
+        if (!prunedCount && logName.empty()) {
+            return;
+        }
+        static int prunesLogged = 0;
+        if (prunesLogged >= 25) {
+            return;
+        }
+        ++prunesLogged;
+        log::warn("afterflow: {} {} {} entries, {} stale: {} (p1 ground {} p2 ground {})", logName.empty() ? "dictionary" : logName,
+            static_cast<void*>(dictionary), pendingEntries, prunedCount, remarks.empty() ? "none" : remarks,
+            g_trackedGround1 ? static_cast<void*>(g_trackedGround1->m_maybeLastGroundObject) : nullptr,
+            g_trackedGround2 ? static_cast<void*>(g_trackedGround2->m_maybeLastGroundObject) : nullptr);
+        if (prunesLogged == 25) {
+            log::warn("afterflow: further dictionary sanitizing will not be logged");
+        }
+    }
+
     void checkGhost(PlayLayer* gameLayer, PlayerObject* ghostPlayer, float deltaTime) {
+        auto* realFirst = gameLayer->m_player1;
+        bool const hasReal = realFirst && realFirst != ghostPlayer;
+        std::string const realBefore = hasReal ? collisionCounts(realFirst) : "none";
+        ghostPlayer->m_collisionLogTop = keepGhostCollisionLog(ghostPlayer->m_collisionLogTop);
+        ghostPlayer->m_collisionLogBottom = keepGhostCollisionLog(ghostPlayer->m_collisionLogBottom);
+        ghostPlayer->m_collisionLogLeft = keepGhostCollisionLog(ghostPlayer->m_collisionLogLeft);
+        ghostPlayer->m_collisionLogRight = keepGhostCollisionLog(ghostPlayer->m_collisionLogRight);
         clearCollisionLog(ghostPlayer->m_collisionLogTop);
         clearCollisionLog(ghostPlayer->m_collisionLogBottom);
         clearCollisionLog(ghostPlayer->m_collisionLogLeft);
         clearCollisionLog(ghostPlayer->m_collisionLogRight);
         gameLayer->checkCollisions(ghostPlayer, deltaTime, false);
+        static int trafficSamples = 0;
+        if (trafficSamples < 5) {
+            ++trafficSamples;
+            log::info("afterflow: collision traffic {} ghost {} real {} -> {}", trafficSamples, collisionCounts(ghostPlayer), realBefore,
+                hasReal ? collisionCounts(realFirst) : std::string("none"));
+        }
     }
 
     bool isFlying(PlayerObject* playerObject) {
@@ -7444,12 +7854,13 @@ finally {
 
     enum class SimEnd { Ok, StopSearch };
 
-    int simulate(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
+    int runPrediction(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
         int stopAtTick, SimEnd* simulationEnd) {
         *simulationEnd = SimEnd::Ok;
         if (!state.ghostPlayer1 || !player1) {
             return horizonTicks;
         }
+        recordLayerChildCounts(gameLayer);
         state.isSimulating = true;
         state.hasGhostDied = false;
         state.hasGhostHitPortal = false;
@@ -7471,9 +7882,9 @@ finally {
             state.realRectanglePlayer1 = player1->getObjectRect();
             state.realRectanglePlayer2 = isSecondPlayer ? player2->getObjectRect() : state.realRectanglePlayer1;
         }
-        copyState(state.ghostPlayer1, player1);
+        mirrorStateIntoGhost(state.ghostPlayer1, player1);
         if (isSecondPlayer) {
-            copyState(state.ghostPlayer2, player2);
+            mirrorStateIntoGhost(state.ghostPlayer2, player2);
         }
         state.isHeld1 = state.isHeld2 = state.hasAppliedInput;
         state.isAuto1 = state.isAuto2 = false;
@@ -7481,9 +7892,9 @@ finally {
 
         bool isWaveRun = player1->m_isDart || (isSecondPlayer && player2->m_isDart);
         if (state.waveVersion46Mode && isWaveRun && delayTicks > 0 && !state.skipPressHandling) {
-            pressGhost(state.ghostPlayer1, !isDown);
+            applyGhostPress(state.ghostPlayer1, !isDown);
             if (isSecondPlayer) {
-                pressGhost(state.ghostPlayer2, !isDown);
+                applyGhostPress(state.ghostPlayer2, !isDown);
             }
         }
 
@@ -7523,17 +7934,17 @@ finally {
                 state.autoReleaseTick2 = -2;
             }
             if (currentTick == delayTicks && !state.skipPressHandling) {
-                pressGhost(state.ghostPlayer1, isDown);
+                applyGhostPress(state.ghostPlayer1, isDown);
                 if (isSecondPlayer) {
-                    pressGhost(state.ghostPlayer2, isDown);
+                    applyGhostPress(state.ghostPlayer2, isDown);
                 }
             }
             if (state.retapTick >= 0) {
                 int tick = currentTick - delayTicks - state.retapTick;
                 if (tick == 0 || tick == 1 || tick == 5) {
-                    pressGhost(state.ghostPlayer1, tick == 1);
+                    applyGhostPress(state.ghostPlayer1, tick == 1);
                     if (isSecondPlayer) {
-                        pressGhost(state.ghostPlayer2, tick == 1);
+                        applyGhostPress(state.ghostPlayer2, tick == 1);
                     }
                 }
             }
@@ -7541,9 +7952,9 @@ finally {
                 ++releaseAfterTicks;
             }
             if (releaseAfterTicks >= 0 && currentTick == delayTicks + releaseAfterTicks) {
-                pressGhost(state.ghostPlayer1, !isDown);
+                applyGhostPress(state.ghostPlayer1, !isDown);
                 if (isSecondPlayer) {
-                    pressGhost(state.ghostPlayer2, !isDown);
+                    applyGhostPress(state.ghostPlayer2, !isDown);
                 }
             }
             float stepDeltaTime = currentTick == 0 ? deltaTime * state.firstStepScale : deltaTime;
@@ -7628,7 +8039,7 @@ finally {
         if ((hasDied || state.hasGhostHitPortal) && currentTick < delayTicks) {
             *simulationEnd = SimEnd::StopSearch;
         }
-        restoreObjects();
+        reassertObjectStates();
         state.ghostPlayer1->stopAllActions();
         if (state.ghostPlayer2) {
             state.ghostPlayer2->stopAllActions();
@@ -7637,17 +8048,17 @@ finally {
         return isSafe ? horizonTicks : survivedTicks;
     }
 
-    int simulateOrbs(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
+    int predictOrbCandidates(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int releaseAfterTicks,
         int stopAtTick, SimEnd* simulationEnd) {
         state.orbClickEnabled = state.assumeOrbHits;
         state.hasTouchedOrb = false;
-        int isFirst = simulate(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
+        int isFirst = runPrediction(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
         if (!state.tryBothOrbCandidates || !state.smartEnabled || !state.hasTouchedOrb || isFirst >= stopAtTick) {
             return isFirst;
         }
         SimEnd firstSimulationEnd = *simulationEnd;
         state.orbClickEnabled = !state.assumeOrbHits;
-        int isSecondPlayer = simulate(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
+        int isSecondPlayer = runPrediction(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, simulationEnd);
         state.orbClickEnabled = state.assumeOrbHits;
         if (firstSimulationEnd != SimEnd::StopSearch) {
             *simulationEnd = SimEnd::Ok;
@@ -7659,7 +8070,7 @@ finally {
                 state.orbClickEnabled = true;
                 state.orbClickDelayTicks = st(lateTick);
                 SimEnd lateSimulationEnd;
-                int candidateResult = simulate(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, &lateSimulationEnd);
+                int candidateResult = runPrediction(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, releaseAfterTicks, stopAtTick, &lateSimulationEnd);
                 state.orbClickDelayTicks = 0;
                 state.orbClickEnabled = state.assumeOrbHits;
                 bestResult = std::max(bestResult, candidateResult);
@@ -7675,7 +8086,7 @@ finally {
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - clickStartTime).count();
     }
 
-    int fullWaveHorizon(bool isMini) {
+    int waveHorizonTicks(bool isMini) {
         int waveHorizonTicks = std::clamp(state.waveHorizonTicks, 20, 160);
         return st(isMini ? std::max(20, waveHorizonTicks - 15) : waveHorizonTicks);
     }
@@ -7698,7 +8109,7 @@ finally {
         state.intendedOrbObject = nullptr;
 
         if (learnedDelay > 0 && learnedDelay <= searchWindowTicks) {
-            int learnedResult = simulate(gameLayer, player1, player2, isDual, learnedDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+            int learnedResult = runPrediction(gameLayer, player1, player2, isDual, learnedDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
             if (state.pressOrbRingObject && learnedResult >= horizonTicks) {
                 *landingTick = learnedResult;
                 state.intendedOrbObject = state.pressOrbRingObject;
@@ -7710,12 +8121,12 @@ finally {
         state.probeOrbCandidates.clear();
         state.isProbing = true;
         state.skipPressHandling = true;
-        simulate(gameLayer, player1, player2, isDual, 0, true, searchWindowTicks + 2, -1, searchWindowTicks + 2, &simulationEnd);
+        runPrediction(gameLayer, player1, player2, isDual, 0, true, searchWindowTicks + 2, -1, searchWindowTicks + 2, &simulationEnd);
         state.skipPressHandling = false;
         state.isProbing = false;
         std::string traceText;
 
-        int currentResult = simulate(gameLayer, player1, player2, isDual, 0, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+        int currentResult = runPrediction(gameLayer, player1, player2, isDual, 0, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
         RingObject* currentRing = state.pressOrbRingObject;
         bool currentUsesOrb = currentRing != nullptr;
         int maxDelayTicks = searchWindowTicks + st(4);
@@ -7763,7 +8174,7 @@ finally {
             int timingHigh = std::min(closeTick + st(4), maxDelayTicks);
             int timingBestResult = -1;
             for (int timingDelay = timingLow; timingDelay <= timingHigh; ++timingDelay) {
-                int timingResult = simulate(gameLayer, player1, player2, isDual, timingDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+                int timingResult = runPrediction(gameLayer, player1, player2, isDual, timingDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
                 bool isTimingOrbUsed = state.pressOrbRingObject == currentRing;
                 if (state.explainEnabled) {
                     traceText += fmt::format(" +{}:{}{}", timingDelay, timingResult, isTimingOrbUsed ? "o" : "-");
@@ -7792,7 +8203,7 @@ finally {
             int nearLow = std::max(1, targetCloseTick);
             int nearHigh = std::min(targetCloseTick + st(4), maxDelayTicks);
             for (int nearDelay = nearLow; nearDelay <= nearHigh; ++nearDelay) {
-                int nearResult = simulate(gameLayer, player1, player2, isDual, nearDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+                int nearResult = runPrediction(gameLayer, player1, player2, isDual, nearDelay, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
                 bool isNearOrbUsed = state.pressOrbRingObject == targetProbe->ringObject;
                 if (state.explainEnabled) {
                     traceText += fmt::format(" +{}:{}{}", nearDelay, nearResult, isNearOrbUsed ? "o" : "-");
@@ -7837,7 +8248,7 @@ finally {
 
     int waveScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int candidateResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
+        int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
         if (candidateResult >= targetTick || *simulationEnd == SimEnd::StopSearch) {
             return candidateResult;
         }
@@ -7848,7 +8259,7 @@ finally {
             }
             int runLengthTicks = std::min(horizonTicks, turnTick + st(WAVE_ESCAPE_TICKS));
             SimEnd turnEndReason;
-            int turnedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
+            int turnedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
             if (turnedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
                     state.baseEscapeTicks = turnTick;
@@ -7862,7 +8273,7 @@ finally {
 
     int robotScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, int horizonTicks, int targetTick, SimEnd* simulationEnd) {
         int usualHoldTicks = robotHoldHistory.pick(st(20), 50);
-        int bestResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, usualHoldTicks, targetTick, simulationEnd);
+        int bestResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, usualHoldTicks, targetTick, simulationEnd);
         robotUsedHoldTicks = usualHoldTicks;
         if (bestResult >= targetTick || *simulationEnd == SimEnd::StopSearch || isQuickScore) {
             return bestResult;
@@ -7872,7 +8283,7 @@ finally {
                 continue;
             }
             SimEnd trialSimulationEnd;
-            int trialResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, st(holdTicks), targetTick, &trialSimulationEnd);
+            int trialResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, st(holdTicks), targetTick, &trialSimulationEnd);
             if (trialResult > bestResult) {
                 bestResult = trialResult;
                 robotUsedHoldTicks = st(holdTicks);
@@ -7886,7 +8297,7 @@ finally {
 
     int spiderScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, int horizonTicks, int releaseAfterTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int baseResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
+        int baseResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
         if (baseResult >= targetTick || *simulationEnd == SimEnd::StopSearch || isQuickScore) {
             return baseResult;
         }
@@ -7898,7 +8309,7 @@ finally {
             int runLengthTicks = std::min(horizonTicks, retapTick + st(16));
             state.retapTick = retapTick;
             SimEnd retapSimulationEnd;
-            int retappedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &retapSimulationEnd);
+            int retappedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &retapSimulationEnd);
             state.retapTick = -1;
             if (retappedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
@@ -7911,7 +8322,7 @@ finally {
         return baseResult;
     }
 
-    bool sameCrash(int candidateDelay, int candidateResult, int baseDelay, int& sameCrashStreak) {
+    bool sameCrashSignature(int candidateDelay, int candidateResult, int baseDelay, int& sameCrashStreak) {
         if (sameCrashStreak >= 0 && std::abs(candidateDelay + candidateResult - baseDelay) <= 1) {
             ++sameCrashStreak;
         }
@@ -7925,7 +8336,7 @@ finally {
         return false;
     }
 
-    int searchSmallest(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
+    int smallestHeldTicks(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
         double budgetMilliseconds = -1.0, bool isQuiet = false, bool needsFullSearch = false) {
         if (budgetMilliseconds < 0.0) {
             budgetMilliseconds = state.budgetMilliseconds;
@@ -7950,7 +8361,7 @@ finally {
                 *landingTick = candidateResult;
                 return candidateDelay;
             }
-            if (sameCrash(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
+            if (sameCrashSignature(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
                 return 0;
             }
             if (std::chrono::duration<double, std::milli>(clock::now() - startTime).count() > budgetMilliseconds) {
@@ -7963,10 +8374,10 @@ finally {
         return 0;
     }
 
-    int searchTwoPass(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
+    int twoPassPressSearch(int horizonTicks, int maxDelayTicks, int baseDelay, int* landingTick, std::function<int(int, int, SimEnd*)> const& scoreFunction,
         bool needsFullSearch = false) {
         isQuickScore = true;
-        int candidateDelay = searchSmallest(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, state.budgetMilliseconds * 0.5, true, needsFullSearch);
+        int candidateDelay = smallestHeldTicks(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, state.budgetMilliseconds * 0.5, true, needsFullSearch);
         isQuickScore = false;
         if (candidateDelay > 0) {
             return candidateDelay;
@@ -7977,12 +8388,12 @@ finally {
             say("prediction budget hit (quick pass only)");
             return 0;
         }
-        return searchSmallest(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, remainingBudget, false, needsFullSearch);
+        return smallestHeldTicks(horizonTicks, maxDelayTicks, baseDelay, landingTick, scoreFunction, remainingBudget, false, needsFullSearch);
     }
 
     int shipScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, bool isDown, int horizonTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int candidateResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
+        int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, horizonTicks, -1, targetTick, simulationEnd);
         if (candidateResult >= targetTick || *simulationEnd == SimEnd::StopSearch) {
             return candidateResult;
         }
@@ -7993,7 +8404,7 @@ finally {
             }
             int runLengthTicks = std::min(horizonTicks, turnTick + st(WAVE_ESCAPE_TICKS));
             SimEnd turnEndReason;
-            int turnedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
+            int turnedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, isDown, runLengthTicks, turnTick, runLengthTicks, &turnEndReason);
             if (turnedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
                     state.baseEscapeTicks = turnTick;
@@ -8007,7 +8418,7 @@ finally {
 
     int ufoScore(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int delayTicks, int horizonTicks, int releaseAfterTicks, int targetTick,
         SimEnd* simulationEnd) {
-        int baseResult = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
+        int baseResult = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
         if (baseResult >= targetTick || *simulationEnd == SimEnd::StopSearch || isQuickScore) {
             return baseResult;
         }
@@ -8019,7 +8430,7 @@ finally {
             int runLengthTicks = std::min(horizonTicks, reflapTick + st(20));
             state.retapTick = reflapTick;
             SimEnd reflapSimulationEnd;
-            int reflappedTicks = simulateOrbs(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &reflapSimulationEnd);
+            int reflappedTicks = predictOrbCandidates(gameLayer, player1, player2, isDual, delayTicks, true, runLengthTicks, releaseAfterTicks, runLengthTicks, &reflapSimulationEnd);
             state.retapTick = -1;
             if (reflappedTicks >= runLengthTicks) {
                 if (state.captureKillerObject && state.baseEscapeTicks < 0) {
@@ -8032,7 +8443,7 @@ finally {
         return baseResult;
     }
 
-    int searchWave(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, int horizonTicks, int maxDelayTicks, int baseDelay,
+    int wavePressSearch(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, int horizonTicks, int maxDelayTicks, int baseDelay,
         int* landingTick) {
         isMarginUsed = false;
         using clock = std::chrono::steady_clock;
@@ -8070,7 +8481,7 @@ finally {
         return 0;
     }
 
-    int searchDelay(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, bool hasWave, int horizonTicks, int maxDelayTicks,
+    int delayPressSearch(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, bool isDown, bool hasWave, int horizonTicks, int maxDelayTicks,
         int releaseAfterTicks, int baseDelay, int* landingTick, bool needsFullSearch = false) {
         using clock = std::chrono::steady_clock;
         auto startTime = clock::now();
@@ -8086,7 +8497,7 @@ finally {
         int waveBestResult = baseDelay;
         for (int candidateDelay = 1; candidateDelay <= maxDelayTicks; ++candidateDelay) {
             SimEnd simulationEnd;
-            int candidateResult = simulateOrbs(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, hasWave ? horizonTicks : targetTick, &simulationEnd);
+            int candidateResult = predictOrbCandidates(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, hasWave ? horizonTicks : targetTick, &simulationEnd);
             if (candidateResult > debugBestResult) {
                 debugBestResult = candidateResult;
                 debugBestDelay = candidateDelay;
@@ -8109,16 +8520,16 @@ finally {
                     }
                 }
             }
-            else if (candidateResult < targetTick && sameCrash(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
+            else if (candidateResult < targetTick && sameCrashSignature(candidateDelay, candidateResult, baseDelay, sameCrashStreak)) {
                 break;
             }
             else if (candidateResult >= targetTick) {
 
                 SimEnd fullSearchEnd;
-                if (candidateResult < horizonTicks && simulateOrbs(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &fullSearchEnd) < horizonTicks) {
+                if (candidateResult < horizonTicks && predictOrbCandidates(gameLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &fullSearchEnd) < horizonTicks) {
                     for (int innerIndex = candidateDelay + 1; innerIndex <= maxDelayTicks && !hasExceededBudget(); ++innerIndex) {
                         SimEnd innerSimulationEnd;
-                        int innerResult = simulateOrbs(gameLayer, player1, player2, isDual, innerIndex, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &innerSimulationEnd);
+                        int innerResult = predictOrbCandidates(gameLayer, player1, player2, isDual, innerIndex, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &innerSimulationEnd);
                         if (innerSimulationEnd == SimEnd::StopSearch) {
                             break;
                         }
@@ -8143,7 +8554,7 @@ finally {
         return 0;
     }
 
-    void queueInput(int tickCount, bool isDown) {
+    void stashButtonEvent(int tickCount, bool isDown) {
         state.queuedInputs.push_back({ tickCount, isDown });
     }
 
@@ -8196,7 +8607,7 @@ finally {
 
         bool hasShip = player1 && (player1->m_isShip || (player2 && player2->m_isShip));
         if (!player1 || player1->m_isDead || (hasShip && !state.shipBufferEnabled)) {
-            resetPending();
+            clearQueuedPresses();
             state.hasAppliedInput = isDown;
             return false;
         }
@@ -8237,7 +8648,7 @@ finally {
                     state.queuedInputs[index].ticksRemaining = static_cast<int>(index);
                 }
                 if (state.queuedInputs.back().isDown != isDown) {
-                    queueInput(static_cast<int>(state.queuedInputs.size()), isDown);
+                    stashButtonEvent(static_cast<int>(state.queuedInputs.size()), isDown);
                 }
                 state.inputShiftTicks = 0;
                 return true;
@@ -8248,7 +8659,7 @@ finally {
 
         if (!state.queuedInputs.empty()) {
             int afterTicks = state.queuedInputs.back().ticksRemaining;
-            queueInput(std::max(state.inputShiftTicks - earlyTicks, afterTicks), isDown);
+            stashButtonEvent(std::max(state.inputShiftTicks - earlyTicks, afterTicks), isDown);
             return true;
         }
 
@@ -8266,7 +8677,7 @@ finally {
                 if (state.releaseShiftTicks > 0) {
                     state.inputShiftTicks = state.releaseShiftTicks;
                     state.releaseShiftTicks = 0;
-                    queueInput(state.inputShiftTicks, false);
+                    stashButtonEvent(state.inputShiftTicks, false);
                     return true;
                 }
                 state.hasAppliedInput = false;
@@ -8281,7 +8692,7 @@ finally {
         }
         int horizonTicks = st(hasFlyer ? 48 : groundHorizon);
         if (hasWave) {
-            horizonTicks = fullWaveHorizon(isMini);
+            horizonTicks = waveHorizonTicks(isMini);
         }
         int const stageDelayTicks = hasWave ? state.ticksWaveMode : (hasShip ? std::clamp(state.shipMaxDelayTicks, 0, 16) : state.ticksAllModes);
         int const modeDelayTicks = modeTicksAt(activeModeIndex());
@@ -8290,11 +8701,10 @@ finally {
             state.hasAppliedInput = isDown;
             return false;
         }
-
         bool hasAnyRobot = player1->m_isRobot || (player2 && player2->m_isRobot);
         int releaseAfterTicks = -1;
         if (isDown && !hasWave && !hasShip) {
-            releaseAfterTicks = hasAnyRobot ? robotHoldHistory.pick(-1, 50) : holdEstimate();
+            releaseAfterTicks = hasAnyRobot ? robotHoldHistory.pick(-1, 50) : estimateHoldTicks();
         }
 
         bool isGrounded = player1->m_isOnGround && (!player2 || player2->m_isOnGround);
@@ -8304,7 +8714,7 @@ finally {
             if (candidateDelay > 0) {
                 say("orb {} +{}t ({:g}f) -> {}t", state.wasOrbTiming ? "timing" : "press", candidateDelay, candidateDelay * TICK_DURATION, orbLandingTick);
                 state.inputShiftTicks = candidateDelay;
-                queueInput(candidateDelay - earlyTicks, isDown);
+                stashButtonEvent(candidateDelay - earlyTicks, isDown);
                 return true;
             }
         }
@@ -8325,7 +8735,7 @@ finally {
                  : isSpiderPress   ? spiderScore(playLayer, player1, player2, isDual, 0, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd)
                  : isUfoPress      ? ufoScore(playLayer, player1, player2, isDual, 0, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd)
                  : isShipInput     ? shipScore(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, horizonTicks, &simulationEnd)
-                                 : simulateOrbs(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+                                 : predictOrbCandidates(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
 
         std::string tickTagText = midTickFraction > 0.f ? fmt::format(" @{:.2f}", midTickFraction) : std::string();
         if (baseDelay >= horizonTicks) {
@@ -8344,20 +8754,20 @@ finally {
         isCrashFixed = false;
         int neededTicks = (isGroundPress || isRobotPress || isUfoPress) ? horizonTicks : std::min(horizonTicks, baseDelay + st(12));
 
-        savedTick = isCubeStyleWave ? searchWave(playLayer, player1, player2, isDual, isDown, horizonTicks, maxDelayTicks, baseDelay, &landingTick)
-              : isRobotPress    ? searchTwoPass(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+        savedTick = isCubeStyleWave ? wavePressSearch(playLayer, player1, player2, isDual, isDown, horizonTicks, maxDelayTicks, baseDelay, &landingTick)
+              : isRobotPress    ? twoPassPressSearch(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return robotScore(playLayer, player1, player2, isDual, candidateDelay, horizonTicks, targetTick, simulationEnd);
                 }, true)
-              : isSpiderPress   ? searchTwoPass(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+              : isSpiderPress   ? twoPassPressSearch(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return spiderScore(playLayer, player1, player2, isDual, candidateDelay, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
                 })
-              : isShipInput     ? searchSmallest(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+              : isShipInput     ? smallestHeldTicks(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return shipScore(playLayer, player1, player2, isDual, candidateDelay, isDown, horizonTicks, targetTick, simulationEnd);
                 })
-              : isUfoPress      ? searchTwoPass(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
+              : isUfoPress      ? twoPassPressSearch(horizonTicks, maxDelayTicks, baseDelay, &landingTick, [&](int candidateDelay, int targetTick, SimEnd* simulationEnd) {
                     return ufoScore(playLayer, player1, player2, isDual, candidateDelay, horizonTicks, releaseAfterTicks, targetTick, simulationEnd);
                 }, true)
-                              : searchDelay(playLayer, player1, player2, isDual, isDown, hasWave, horizonTicks, maxDelayTicks, releaseAfterTicks, baseDelay, &landingTick,
+                              : delayPressSearch(playLayer, player1, player2, isDual, isDown, hasWave, horizonTicks, maxDelayTicks, releaseAfterTicks, baseDelay, &landingTick,
                                     isGroundPress);
 
         if (savedTick <= 0) {
@@ -8372,7 +8782,7 @@ finally {
             int verificationHorizonTicks = st(8);
             state.retapTick = -1;
             state.orbClickEnabled = false;
-            simulate(playLayer, player1, player2, isDual, savedTick, isDown, verificationHorizonTicks, -1, verificationHorizonTicks, &verificationEnd);
+            runPrediction(playLayer, player1, player2, isDual, savedTick, isDown, verificationHorizonTicks, -1, verificationHorizonTicks, &verificationEnd);
             if (state.pressOrbRingObject != state.intendedOrbObject) {
                 if (state.explainEnabled) {
                     say("orb save +{}t rejected: press would use {}, not the clicked orb", savedTick,
@@ -8390,7 +8800,7 @@ finally {
             isCubeStyleWave && isMarginUsed ? std::string("  +margin")
             : isRobotPress ? fmt::format("  hold {}t", robotUsedHoldTicks) : std::string());
         state.inputShiftTicks = savedTick;
-        queueInput(savedTick - earlyTicks, isDown);
+        stashButtonEvent(savedTick - earlyTicks, isDown);
         return true;
     }
 
@@ -8399,10 +8809,10 @@ finally {
         bool didChange = nextIndex != state.stageIndex;
         state.stageIndex = nextIndex;
         Mod::get()->setSavedValue("stage", state.stageIndex);
-        resetPending();
+        clearQueuedPresses();
         auto* gameLayer = GameManager::get()->m_playLayer;
         if (gameLayer && !state.wasAutoReleased && state.hasAppliedInput != state.hasRealInput) {
-            sendButton(gameLayer, state.hasRealInput);
+            forwardPressToGame(gameLayer, state.hasRealInput);
         }
         applyStage();
         refreshAfterflowOverlay();
@@ -8443,7 +8853,7 @@ finally {
         }
     }
 
-    void deliverPending(PlayLayer* gameLayer, PlayerObject* playerObject) {
+void flushHeldPress(PlayLayer* gameLayer, PlayerObject* playerObject) {
         if (gameLayer->m_isPaused) {
             return;
         }
@@ -8453,18 +8863,18 @@ finally {
         bool isTwoPlayer = gameLayer->m_level && gameLayer->m_level->m_twoPlayerMode;
         bool isDual = !isTwoPlayer && gameLayer->m_gameState.m_isDualMode && gameLayer->m_player2;
         if (!state.shipBufferEnabled && (playerObject->m_isShip || (isDual && gameLayer->m_player2->m_isShip))) {
-            resetPending();
+            clearQueuedPresses();
             if (state.hasAppliedInput != state.hasRealInput) {
-                sendButton(gameLayer, state.hasRealInput);
+                forwardPressToGame(gameLayer, state.hasRealInput);
             }
             return;
         }
 
         if (state.queuedInputs.empty()) {
             if (state.hasAppliedInput != state.hasRealInput) {
-                sendButton(gameLayer, state.hasRealInput);
+                forwardPressToGame(gameLayer, state.hasRealInput);
             }
-            sweepGhostLayer();
+            clearGhostScenery();
             return;
         }
 
@@ -8473,7 +8883,7 @@ finally {
             state.queuedInputs.pop_front();
             state.releaseShiftTicks = isDown ? state.inputShiftTicks : 0;
             if (isDown != state.hasAppliedInput) {
-                sendButton(gameLayer, isDown);
+                forwardPressToGame(gameLayer, isDown);
             }
         }
         for (auto& queuedInput : state.queuedInputs) {
@@ -8493,6 +8903,139 @@ finally {
             log::info("afterflow: {}", name);       \
         }                                           \
     } while (false)
+
+#ifdef GEODE_IS_WINDOWS
+namespace {
+    std::filesystem::path crashGameDirectory() {
+        wchar_t path[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        return std::filesystem::path(path).parent_path();
+    }
+
+    std::string crashFrameName(void* address, uintptr_t& offset) {
+        HMODULE module = nullptr;
+        offset = 0;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(address), &module) || !module) {
+            return "unknown";
+        }
+        wchar_t path[MAX_PATH] = {};
+        GetModuleFileNameW(module, path, MAX_PATH);
+        offset = reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module);
+        return std::filesystem::path(path).filename().string();
+    }
+
+    void addCrashCandidate(std::vector<uintptr_t>& candidates, uintptr_t value) {
+        if (value < 0x10000 || value > 0x7FFFFFFFFFFF) {
+            return;
+        }
+        if (value % 8 != 0) {
+            return;
+        }
+        for (uintptr_t existing : candidates) {
+            if (existing == value) {
+                return;
+            }
+        }
+        candidates.push_back(value);
+    }
+
+    std::string crashSuspects(EXCEPTION_POINTERS* info) {
+        auto* context = info->ContextRecord;
+        std::vector<uintptr_t> candidates;
+        for (uintptr_t value : { static_cast<uintptr_t>(context->Rcx), static_cast<uintptr_t>(context->Rdx),
+                 static_cast<uintptr_t>(context->R8), static_cast<uintptr_t>(context->R9),
+                 static_cast<uintptr_t>(context->Rbx), static_cast<uintptr_t>(context->Rbp),
+                 static_cast<uintptr_t>(context->Rsi), static_cast<uintptr_t>(context->Rdi) }) {
+            addCrashCandidate(candidates, value);
+        }
+        uintptr_t stackWords[128] = {};
+        if (ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(static_cast<uintptr_t>(context->Rsp)),
+                stackWords, sizeof(stackWords), nullptr)) {
+            for (uintptr_t word : stackWords) {
+                addCrashCandidate(candidates, word);
+            }
+        }
+        std::string text = "suspect objects\n";
+        int reported = 0;
+        for (uintptr_t candidate : candidates) {
+            if (reported >= 24) {
+                break;
+            }
+            void* vtable = nullptr;
+            if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(candidate), &vtable, sizeof(vtable), nullptr) || !vtable) {
+                continue;
+            }
+            uintptr_t offset = 0;
+            std::string name = crashFrameName(vtable, offset);
+            if (name == "unknown") {
+                continue;
+            }
+            text += fmt::format("  {} {}+0x{:X}", reinterpret_cast<void*>(candidate), name, offset);
+            if (name == "GeometryDash.exe") {
+                auto* gameObject = reinterpret_cast<GameObject*>(candidate);
+                text += fmt::format(" objectid {} type {} activated {}", gameObject->m_objectID,
+                    static_cast<int>(gameObject->m_objectType), gameObject->m_isActivated ? 1 : 0);
+            }
+            text += "\n";
+            ++reported;
+        }
+        if (auto* gameLayer = PlayLayer::get()) {
+            PlayerObject* players[2] = { gameLayer->m_player1, gameLayer->m_player2 };
+            for (PlayerObject* player : players) {
+                if (!player) {
+                    continue;
+                }
+                text += fmt::format("  log {} {}\n", static_cast<void*>(player), collisionCounts(player));
+            }
+        }
+        return text;
+    }
+
+    LONG WINAPI afterflowCrashHandler(EXCEPTION_POINTERS* info) {
+        DWORD const code = info->ExceptionRecord->ExceptionCode;
+        if (code != 0xC0000374 && code != 0xC0000005) {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        static bool isWriting = false;
+        if (isWriting) {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        isWriting = true;
+        std::string text = fmt::format("afterflow crash report\nexception 0x{:08X}\naddress 0x{:016X}\n\n", code,
+            reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
+        void* frames[48] = {};
+        USHORT const frameCount = CaptureStackBackTrace(0, 48, frames, nullptr);
+        for (USHORT index = 0; index < frameCount; ++index) {
+            uintptr_t offset = 0;
+            std::string name = crashFrameName(frames[index], offset);
+            text += fmt::format("  {}+0x{:X}\n", name, offset);
+        }
+        text += crashSuspects(info);
+        std::error_code errorCode;
+        std::filesystem::path directory = crashGameDirectory() / "geode" / "crashlogs";
+        std::filesystem::create_directories(directory, errorCode);
+        auto stamp = std::time(nullptr);
+        std::tm local = {};
+        localtime_s(&local, &stamp);
+        char fileName[64] = {};
+        std::strftime(fileName, sizeof(fileName), "afterflow %Y-%m-%d %H.%M.%S.log", &local);
+        std::filesystem::path filePath = directory / fileName;
+        std::ofstream file(filePath);
+        if (file.is_open()) {
+            file << text;
+            file.close();
+        }
+        log::error("{}saved to {}", text, filePath.string());
+        MessageBoxA(nullptr, fmt::format("{}\nsaved to {}", text, filePath.string()).c_str(), "afterflow crash", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+}
+
+$on_mod(Loaded) {
+    AddVectoredExceptionHandler(1, afterflowCrashHandler);
+}
+#endif
 
 $on_mod(Loaded) {
 
@@ -8572,11 +9115,19 @@ class $modify(BufPlayLayer, PlayLayer) {
         (void)self.setHookPriority("PlayLayer::playEndAnimationToPos", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("PlayLayer::pauseGame", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("PlayLayer::resume", MOD_HOOK_PRIORITY);
+        (void)self.setHookPriority("PlayLayer::spawnCircle", MOD_HOOK_PRIORITY);
+    }
+
+    void spawnCircle() {
+        if (state.isSimulating) {
+            return;
+        }
+        PlayLayer::spawnCircle();
     }
 
     void destroyPlayer(PlayerObject* playerObject, GameObject* gameObject) {
 
-        if (state.isSimulating || isGhost(playerObject)) {
+        if (state.isSimulating || isSimulatedGhost(playerObject)) {
             if (state.isSimulating) {
                 state.hasGhostDied = true;
             }
@@ -8587,28 +9138,28 @@ class $modify(BufPlayLayer, PlayLayer) {
         if (!playerObject || wasAlreadyDead || !playerObject->m_isDead) {
             return;
         }
-        resetPending();
+        clearQueuedPresses();
         state.hasAppliedInput = false;
         state.rapidInputTicks = 0;
-        forgetPress();
+        dropHeldPress();
     }
 
     bool init(GJGameLevel* gameLevel, bool useReplayData, bool skipObjectCreation) {
         if (!PlayLayer::init(gameLevel, useReplayData, skipObjectCreation)) {
             return false;
         }
-        dropGhosts();
+        retireGhostPlayers();
         readSettings();
         applyStage();
-        auto* ghost1 = makeGhost(this);
-        auto* ghost2 = makeGhost(this);
-        if (!ghost1 || !ghost2 || !state.ghostRenderLayer) {
-            dropGhosts();
+        auto* ghostA = createGhostPlayer(this);
+        auto* ghostB = createGhostPlayer(this);
+        if (!ghostA || !ghostB || !state.ghostRenderLayer) {
+            retireGhostPlayers();
             log::warn("afterflow: could not create buffer players, buffering disabled for this level");
         }
         else {
-            state.ghostPlayer1 = ghost1;
-            state.ghostPlayer2 = ghost2;
+            state.ghostPlayer1 = ghostA;
+            state.ghostPlayer2 = ghostB;
             state.ghostLayerBaseIndex = state.ghostRenderLayer->getChildrenCount();
             say("buffer ready | {} | {} cycles", stageText(), stageKey());
         }
@@ -8619,49 +9170,49 @@ class $modify(BufPlayLayer, PlayLayer) {
         state.ticksSinceInput = 999;
         state.rapidInputTicks = 0;
         state.wasAutoReleased = false;
-        forgetPress();
-        resetPending();
+        dropHeldPress();
+        clearQueuedPresses();
         scheduleAfterflowOverlay(this);
         return true;
     }
 
     void onQuit() {
-        resetPending();
-        dropGhosts();
+        clearQueuedPresses();
+        retireGhostPlayers();
         PlayLayer::onQuit();
     }
 
     void onExit() {
-        resetPending();
-        dropGhosts();
+        clearQueuedPresses();
+        retireGhostPlayers();
         PlayLayer::onExit();
     }
 
     void resetLevel() {
-        resetPending();
-        forgetPress();
+        clearQueuedPresses();
+        dropHeldPress();
         state.hasAppliedInput = false;
         state.wasAutoReleased = false;
         PlayLayer::resetLevel();
     }
 
     void pauseGame(bool isUnfocused) {
-        resetPending();
+        clearQueuedPresses();
         state.rapidInputTicks = 0;
         state.ticksSinceInput = 999;
         state.wasAutoReleased = false;
-        forgetPress();
-        sweepGhostLayer();
+        dropHeldPress();
+        clearGhostScenery();
         PlayLayer::pauseGame(isUnfocused);
     }
 
     void resume() {
-        resetPending();
+        clearQueuedPresses();
         state.rapidInputTicks = 0;
         state.ticksSinceInput = 999;
         state.wasAutoReleased = false;
-        forgetPress();
-        sweepGhostLayer();
+        dropHeldPress();
+        clearGhostScenery();
         PlayLayer::resume();
     }
 
@@ -8790,7 +9341,7 @@ public:
         if (deltaX * deltaX + deltaY * deltaY > reach * reach) {
             return false;
         }
-        m_dragging = true;
+        m_dragActive = true;
         m_moved = false;
         m_dragStart = local;
         m_dragOffset = CCPoint(m_home.x - local.x, m_home.y - local.y);
@@ -8800,7 +9351,7 @@ public:
     }
 
     void ccTouchMoved(CCTouch* touch, CCEvent*) override {
-        if (!m_dragging || !m_face || !touch) {
+        if (!m_dragActive || !m_face || !touch) {
             return;
         }
         CCPoint local = convertTouchToNodeSpace(touch);
@@ -8818,10 +9369,10 @@ public:
     }
 
     void ccTouchEnded(CCTouch* touch, CCEvent*) override {
-        if (!m_dragging) {
+        if (!m_dragActive) {
             return;
         }
-        m_dragging = false;
+        m_dragActive = false;
         if (m_face) {
             m_face->stopAllActions();
             m_face->runAction(CCScaleTo::create(0.1f, 1.f));
@@ -8837,7 +9388,7 @@ public:
     }
 
     void ccTouchCancelled(CCTouch*, CCEvent*) override {
-        m_dragging = false;
+        m_dragActive = false;
         m_moved = false;
         if (m_face) {
             m_face->stopAllActions();
@@ -8918,7 +9469,7 @@ private:
     CCPoint m_home;
     CCPoint m_dragStart;
     CCPoint m_dragOffset;
-    bool m_dragging = false;
+    bool m_dragActive = false;
     bool m_moved = false;
     CCNode* m_face = nullptr;
 };
@@ -8999,7 +9550,7 @@ class $modify(BufMenuLayer, MenuLayer) {
 class $modify(BufEditorLayer, LevelEditorLayer) {
     bool init(GJGameLevel* gameLevel, bool withoutUI) {
         bool isSuccess = LevelEditorLayer::init(gameLevel, withoutUI);
-        dropGhosts();
+        retireGhostPlayers();
         scheduleAfterflowOverlay(this);
         return isSuccess;
     }
@@ -9021,6 +9572,8 @@ class $modify(BufHardStreak, HardStreak) {
 class $modify(BufEffectGameObject, EffectGameObject) {
     static void onModify(auto& self) {
         (void)self.setHookPriority("EffectGameObject::triggerObject", MOD_HOOK_PRIORITY);
+        (void)self.setHookPriority("EffectGameObject::playTriggerEffect", MOD_HOOK_PRIORITY);
+        (void)self.setHookPriority("EffectGameObject::animationTriggered", MOD_HOOK_PRIORITY);
     }
 
     void triggerObject(GJBaseGameLayer* gameLayer, int uniqueId, gd::vector<int> const* remapKeyVector) {
@@ -9028,6 +9581,20 @@ class $modify(BufEffectGameObject, EffectGameObject) {
             return;
         }
         EffectGameObject::triggerObject(gameLayer, uniqueId, remapKeyVector);
+    }
+
+    void playTriggerEffect() {
+        if (state.isSimulating) {
+            return;
+        }
+        EffectGameObject::playTriggerEffect();
+    }
+
+    void animationTriggered() {
+        if (state.isSimulating) {
+            return;
+        }
+        EffectGameObject::animationTriggered();
     }
 };
 
@@ -9047,6 +9614,15 @@ class $modify(BufGameObject, GameObject) {
 class $modify(BufRingObject, RingObject) {
     static void onModify(auto& self) {
         (void)self.setHookPriority("RingObject::spawnCircle", MOD_HOOK_PRIORITY);
+        (void)self.setHookPriority("RingObject::powerOnObject", MOD_HOOK_PRIORITY);
+        (void)self.setHookPriority("RingObject::triggerActivated", MOD_HOOK_PRIORITY);
+    }
+
+    void triggerActivated(float xPosition) {
+        if (state.isSimulating) {
+            return;
+        }
+        RingObject::triggerActivated(xPosition);
     }
 
     void spawnCircle() {
@@ -9054,6 +9630,27 @@ class $modify(BufRingObject, RingObject) {
             return;
         }
         RingObject::spawnCircle();
+    }
+
+    void powerOnObject(int activationState) {
+        if (state.isSimulating) {
+            return;
+        }
+        RingObject::powerOnObject(activationState);
+    }
+};
+
+class $modify(BufDictionary, cocos2d::CCDictionary) {
+    static void onModify(auto& self) {
+        (void)self.setHookPriority("cocos2d::CCDictionary::removeAllObjects", MOD_HOOK_PRIORITY);
+    }
+
+    void removeAllObjects() {
+        if (!state.isSimulating && this->count() > 0) {
+            std::string logName = playerLogLabel(this);
+            pruneDictionaryEntries(this, logName, !logName.empty());
+        }
+        cocos2d::CCDictionary::removeAllObjects();
     }
 };
 
@@ -9076,9 +9673,6 @@ class $modify(BufPlayerObject, PlayerObject) {
         auto* gameLayer = GameManager::get()->m_playLayer;
         if (gameLayer && this == gameLayer->m_player1 && !gameLayer->m_isPaused) {
             ++currentTick;
-            if (state.isEnabled) {
-                deliverPending(gameLayer, this);
-            }
         }
 
         bool isFirstPlayer = gameLayer && this == gameLayer->m_player1;
@@ -9108,70 +9702,70 @@ class $modify(BufPlayerObject, PlayerObject) {
         PlayerObject::incrementJumps();
     }
 
-    bool ghostEffect() {
-        return state.isSimulating && isGhost(this);
+    bool ghostFxNode() {
+        return state.isSimulating && isSimulatedGhost(this);
     }
 
     void spawnCircle() {
-        if (!ghostEffect()) PlayerObject::spawnCircle();
+        if (!ghostFxNode()) PlayerObject::spawnCircle();
     }
 
     void spawnDualCircle() {
-        if (!ghostEffect()) PlayerObject::spawnDualCircle();
+        if (!ghostFxNode()) PlayerObject::spawnDualCircle();
     }
 
     void spawnPortalCircle(ccColor3B portalColor, float initialRadius) {
-        if (!ghostEffect()) PlayerObject::spawnPortalCircle(portalColor, initialRadius);
+        if (!ghostFxNode()) PlayerObject::spawnPortalCircle(portalColor, initialRadius);
     }
 
     void spawnScaleCircle() {
-        if (!ghostEffect()) PlayerObject::spawnScaleCircle();
+        if (!ghostFxNode()) PlayerObject::spawnScaleCircle();
     }
 
     void playBumpEffect(int gameObjectType, GameObject* gameObject) {
-        if (!ghostEffect()) PlayerObject::playBumpEffect(gameObjectType, gameObject);
+        if (!ghostFxNode()) PlayerObject::playBumpEffect(gameObjectType, gameObject);
     }
 
 #ifndef GEODE_IS_IOS
     void playSpawnEffect() {
-        if (!ghostEffect()) PlayerObject::playSpawnEffect();
+        if (!ghostFxNode()) PlayerObject::playSpawnEffect();
     }
 
     void createFadeOutDartStreak() {
-        if (!ghostEffect()) PlayerObject::createFadeOutDartStreak();
+        if (!ghostFxNode()) PlayerObject::createFadeOutDartStreak();
     }
 
     void fadeOutStreak2(float fadeDuration) {
-        if (!ghostEffect()) PlayerObject::fadeOutStreak2(fadeDuration);
+        if (!ghostFxNode()) PlayerObject::fadeOutStreak2(fadeDuration);
     }
 
     void playDynamicSpiderRun() {
-        if (!ghostEffect()) PlayerObject::playDynamicSpiderRun();
+        if (!ghostFxNode()) PlayerObject::playDynamicSpiderRun();
     }
 
     void animatePlatformerJump(float jumpScale) {
-        if (!ghostEffect()) PlayerObject::animatePlatformerJump(jumpScale);
+        if (!ghostFxNode()) PlayerObject::animatePlatformerJump(jumpScale);
     }
 
     void runBallRotation(float speedValue) {
-        if (!ghostEffect()) PlayerObject::runBallRotation(speedValue);
+        if (!ghostFxNode()) PlayerObject::runBallRotation(speedValue);
     }
 
     void runBallRotation2() {
-        if (!ghostEffect()) PlayerObject::runBallRotation2();
+        if (!ghostFxNode()) PlayerObject::runBallRotation2();
     }
 
     void runNormalRotation(bool isNotNormalMode, float speedValue) {
-        if (!ghostEffect()) PlayerObject::runNormalRotation(isNotNormalMode, speedValue);
+        if (!ghostFxNode()) PlayerObject::runNormalRotation(isNotNormalMode, speedValue);
     }
 #endif
 
     void toggleGhostEffect(GhostType ghostType) {
-        if (!ghostEffect()) PlayerObject::toggleGhostEffect(ghostType);
+        if (!ghostFxNode()) PlayerObject::toggleGhostEffect(ghostType);
     }
 
     void activateStreak() {
-        if (!ghostEffect()) PlayerObject::activateStreak();
+        if (!ghostFxNode()) PlayerObject::activateStreak();
     }
 
     void playSpiderDashEffect(CCPoint fromPoint, CCPoint toPoint) {
@@ -9182,14 +9776,14 @@ class $modify(BufPlayerObject, PlayerObject) {
     }
 
     void playDeathEffect() {
-        if (state.isSimulating || isGhost(this)) {
+        if (state.isSimulating || isSimulatedGhost(this)) {
             return;
         }
         PlayerObject::playDeathEffect();
     }
 
     void playerDestroyed(bool suppressEffects) {
-        if (state.isSimulating || isGhost(this)) {
+        if (state.isSimulating || isSimulatedGhost(this)) {
             if (state.isSimulating) {
                 state.hasGhostDied = true;
             }
@@ -9199,18 +9793,18 @@ class $modify(BufPlayerObject, PlayerObject) {
     }
 
     void playCompleteEffect(bool suppressEffects, bool isInstant) {
-        if (!ghostEffect()) PlayerObject::playCompleteEffect(suppressEffects, isInstant);
+        if (!ghostFxNode()) PlayerObject::playCompleteEffect(suppressEffects, isInstant);
     }
 
     void ringJump(RingObject* ringObject, bool skipCollisionCheck) {
         if (state.isSimulating) {
-            if (!state.smartEnabled || !isGhost(this)) {
+            if (!state.smartEnabled || !isSimulatedGhost(this)) {
                 return;
             }
             if (state.usedOrbs.contains(ringObject)) {
                 return;
             }
-            snapshotObject(ringObject);
+            rememberObjectState(ringObject);
 
             double verticalVelocity = m_yVelocity;
             bool isUpsideDown = m_isUpsideDown;
@@ -9232,7 +9826,7 @@ class $modify(BufPlayerObject, PlayerObject) {
     }
 
     void startDashing(DashRingObject* dashRing) {
-        if (state.isSimulating && isGhost(this)) {
+        if (state.isSimulating && isSimulatedGhost(this)) {
             state.usedOrbs.insert(dashRing);
             if (state.orbUseTick < 0) {
                 state.orbUseTick = state.simulationTick;
@@ -9254,11 +9848,43 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         (void)self.setHookPriority("GJBaseGameLayer::flipGravity", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("GJBaseGameLayer::gameEventTriggered", MOD_HOOK_PRIORITY);
         (void)self.setHookPriority("GJBaseGameLayer::playerWillSwitchMode", MOD_HOOK_PRIORITY);
+        (void)self.setHookPriority("GJBaseGameLayer::update", MOD_HOOK_PRIORITY);
+    }
+
+    static void ensureLiveGroundPointer(PlayerObject* trackedPlayer) {
+        if (!trackedPlayer) {
+            return;
+        }
+        if (!isDeadCocosObject(trackedPlayer->m_maybeLastGroundObject)) {
+            return;
+        }
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            log::warn("afterflow: player ground pointer {} was freed, pointing it at the player before GD logs it",
+                static_cast<void*>(trackedPlayer->m_maybeLastGroundObject));
+        }
+        trackedPlayer->m_maybeLastGroundObject = trackedPlayer;
+    }
+
+    void update(float deltaTime) {
+        if (!state.isSimulating) {
+            g_trackedGround1 = this->m_player1;
+            g_trackedGround2 = this->m_player2;
+            if (state.isEnabled) {
+                if (auto* playLayer = typeinfo_cast<PlayLayer*>(this); playLayer && !playLayer->m_isPaused) {
+                    flushHeldPress(playLayer, playLayer->m_player1);
+                }
+            }
+            ensureLiveGroundPointer(this->m_player1);
+            ensureLiveGroundPointer(this->m_player2);
+        }
+        GJBaseGameLayer::update(deltaTime);
     }
 
     bool canBeActivatedByPlayer(PlayerObject* playerObject, EffectGameObject* effectObject) {
         if (state.isSimulating) {
-            if (!state.smartEnabled || !isGhost(playerObject) || !effectObject) {
+            if (!state.smartEnabled || !isSimulatedGhost(playerObject) || !effectObject) {
                 return false;
             }
 
@@ -9266,14 +9892,10 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
                 if (state.usedOrbs.contains(effectObject)) {
                     return false;
                 }
-                snapshotObject(effectObject);
+                rememberObjectState(effectObject);
                 return true;
             }
-            if (state.simulationUsedObjects.contains(effectObject)) {
-                return false;
-            }
-            snapshotObject(effectObject);
-            return true;
+            return false;
         }
         return GJBaseGameLayer::canBeActivatedByPlayer(playerObject, effectObject);
     }
@@ -9354,9 +9976,9 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
     void handleButton(bool isDown, int buttonId, bool isFirstPlayer) {
         if (!state.isSimulating && buttonId == 1 && !state.isInjecting) {
             auto* player1 = this->m_player1;
-            recordRealInput(isDown, player1);
+            logRealInputPress(isDown, player1);
             bool isHeld = intercept(this, isDown, isFirstPlayer);
-            sweepGhostLayer();
+            clearGhostScenery();
             if (isHeld) {
                 return;
             }
@@ -9366,10 +9988,10 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
 
     void playerTouchedRing(PlayerObject* playerObject, RingObject* ringObject) {
         if (state.isSimulating) {
-            if (!state.smartEnabled || !isGhost(playerObject)) {
+            if (!state.smartEnabled || !isSimulatedGhost(playerObject)) {
                 return;
             }
-            snapshotObject(ringObject);
+            rememberObjectState(ringObject);
             state.hasTouchedOrb = true;
             if (state.firstOrbTouchTick < 0) {
                 state.firstOrbTouchTick = state.simulationTick;
@@ -9401,7 +10023,9 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
                 }
             }
         }
-        GJBaseGameLayer::playerTouchedRing(playerObject, ringObject);
+        if (!state.isSimulating) {
+            GJBaseGameLayer::playerTouchedRing(playerObject, ringObject);
+        }
 
         if (state.isSimulating && state.orbClickEnabled) {
             if (typeinfo_cast<DashRingObject*>(ringObject)) {
@@ -9425,7 +10049,7 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
 
     void flipGravity(PlayerObject* playerObject, bool shouldFlip, bool suppressEffects) {
         if (state.isSimulating) {
-            if (state.smartEnabled && isGhost(playerObject)) {
+            if (state.smartEnabled && isSimulatedGhost(playerObject)) {
                 playerObject->flipGravity(shouldFlip, true);
             }
             return;
@@ -9439,6 +10063,14 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         }
         GJBaseGameLayer::gameEventTriggered(gameEvent, materialId, playerId);
     }
+
+    void playerTouchedTrigger(PlayerObject* playerObject, EffectGameObject* effectObject) {
+        if (state.isSimulating) {
+            return;
+        }
+        GJBaseGameLayer::playerTouchedTrigger(playerObject, effectObject);
+    }
+
 
     void toggleGroupTriggered(int groupId, bool shouldActivate, gd::vector<int> const& remapKeyVector, int triggerId, int controlId) {
         if (state.isSimulating) {
