@@ -151,6 +151,7 @@ namespace {
     constexpr int CUSTOM_TICKS_MIN = 1;
     constexpr int CUSTOM_TICKS_MAX = 240;
     constexpr int MODE_TICKS_MAX = 240;
+    constexpr bool WAVE_DIRECT_INPUT = true;
     constexpr int MODE_TICK_COUNT = 8;
     constexpr char const* MODE_TICK_NAMES[MODE_TICK_COUNT] = {
         "cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing"
@@ -8757,6 +8758,14 @@ finally {
         bool isPlayer1Wave = player1->m_isDart;
         bool hasWave = isPlayer1Wave || (player2 && player2->m_isDart);
         bool isMini = (isPlayer1Wave && player1->m_vehicleSize < 1.f) || (player2 && player2->m_isDart && player2->m_vehicleSize < 1.f);
+
+        // wave is the one mode where the player reads every single click, so the click is handed to the
+        // game untouched instead of being pushed to a later tick, nothing is queued in wave any more
+        if (WAVE_DIRECT_INPUT && hasWave) {
+            clearQueuedPresses();
+            state.hasAppliedInput = isDown;
+            return false;
+        }
 
         int spamGapTicks = st(hasShip && !hasWave ? std::clamp(state.shipSpamGapTicks, 2, 40) : std::clamp(state.spamGapTicks, 4, 40));
         if (state.ticksSinceInput < spamGapTicks) {
