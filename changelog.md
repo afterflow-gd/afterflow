@@ -1,4 +1,5 @@
 # v2.2.6-beta
+- **fix: physics.** the prediction copies the player state exactly the way 2.2.5 did again. 2.2.6 pointed `m_maybeLastGroundObject` at the ghost and restored the ghost's own collision log pointers after `copyAttributes`, both of which changed ground and collision behaviour inside every prediction, so saves landed differently than the real player would have moved.
 - **fix: performance.** custom mode values no longer cost one full prediction per tick. a 240 tick custom value used to run up to 240 predictions inside a single click, which is why custom values ran so much worse than the stages. the first 8 candidates stay exact and the rest step in strides, capped at 24 predictions per click.
 - **fix: performance.** the prediction no longer snapshots a child count for every object in the level on every candidate click. that scan was the biggest per click cost on large levels, it is three container lookups now.
 - **fix: input.** wave clicks go through the buffer again. the 2.2.6 bypass that handed them straight to the game is gone, so wave no longer plays like the mod is switched off.

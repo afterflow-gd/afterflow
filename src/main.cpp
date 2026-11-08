@@ -7384,106 +7384,12 @@ finally {
 
     void* dictionaryVtable();
     bool isDictionaryPointer(void* pointer);
-    CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary);
+    [[maybe_unused]] CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary);
 
     void mirrorStateIntoGhost(PlayerObject* ghostPlayer, PlayerObject* realPlayer) {
         ghostPlayer->setVisible(false);
         ghostPlayer->resetTouchedRings(true);
-#define AFTERFLOW_KEEP(field) auto* own_##field = ghostPlayer->field
-#define AFTERFLOW_RESTORE(field) if (ghostPlayer->field != own_##field) { ghostPlayer->field = own_##field; ++replacedFieldCount; }
-        int replacedFieldCount = 0;
-        AFTERFLOW_KEEP(m_collisionLogTop);
-        AFTERFLOW_KEEP(m_collisionLogBottom);
-        AFTERFLOW_KEEP(m_collisionLogLeft);
-        AFTERFLOW_KEEP(m_collisionLogRight);
-        AFTERFLOW_KEEP(m_particleSystems);
-        AFTERFLOW_KEEP(m_playerGroundParticles);
-        AFTERFLOW_KEEP(m_trailingParticles);
-        AFTERFLOW_KEEP(m_shipClickParticles);
-        AFTERFLOW_KEEP(m_vehicleGroundParticles);
-        AFTERFLOW_KEEP(m_ufoClickParticles);
-        AFTERFLOW_KEEP(m_robotBurstParticles);
-        AFTERFLOW_KEEP(m_dashParticles);
-        AFTERFLOW_KEEP(m_swingBurstParticles1);
-        AFTERFLOW_KEEP(m_swingBurstParticles2);
-        AFTERFLOW_KEEP(m_landParticles0);
-        AFTERFLOW_KEEP(m_landParticles1);
-        AFTERFLOW_KEEP(m_dashFireSprite);
-        AFTERFLOW_KEEP(m_dashSpritesContainer);
-        AFTERFLOW_KEEP(m_regularTrail);
-        AFTERFLOW_KEEP(m_shipStreak);
-        AFTERFLOW_KEEP(m_waveTrail);
-        AFTERFLOW_KEEP(m_ghostTrail);
-        AFTERFLOW_KEEP(m_swingFireMiddle);
-        AFTERFLOW_KEEP(m_swingFireBottom);
-        AFTERFLOW_KEEP(m_swingFireTop);
-        AFTERFLOW_KEEP(m_dashRing);
         ghostPlayer->copyAttributes(realPlayer);
-        AFTERFLOW_RESTORE(m_collisionLogTop);
-        AFTERFLOW_RESTORE(m_collisionLogBottom);
-        AFTERFLOW_RESTORE(m_collisionLogLeft);
-        AFTERFLOW_RESTORE(m_collisionLogRight);
-        ghostPlayer->m_collisionLogTop = keepGhostCollisionLog(ghostPlayer->m_collisionLogTop);
-        ghostPlayer->m_collisionLogBottom = keepGhostCollisionLog(ghostPlayer->m_collisionLogBottom);
-        ghostPlayer->m_collisionLogLeft = keepGhostCollisionLog(ghostPlayer->m_collisionLogLeft);
-        ghostPlayer->m_collisionLogRight = keepGhostCollisionLog(ghostPlayer->m_collisionLogRight);
-        AFTERFLOW_RESTORE(m_particleSystems);
-        AFTERFLOW_RESTORE(m_playerGroundParticles);
-        AFTERFLOW_RESTORE(m_trailingParticles);
-        AFTERFLOW_RESTORE(m_shipClickParticles);
-        AFTERFLOW_RESTORE(m_vehicleGroundParticles);
-        AFTERFLOW_RESTORE(m_ufoClickParticles);
-        AFTERFLOW_RESTORE(m_robotBurstParticles);
-        AFTERFLOW_RESTORE(m_dashParticles);
-        AFTERFLOW_RESTORE(m_swingBurstParticles1);
-        AFTERFLOW_RESTORE(m_swingBurstParticles2);
-        AFTERFLOW_RESTORE(m_landParticles0);
-        AFTERFLOW_RESTORE(m_landParticles1);
-        AFTERFLOW_RESTORE(m_dashFireSprite);
-        AFTERFLOW_RESTORE(m_dashSpritesContainer);
-        AFTERFLOW_RESTORE(m_regularTrail);
-        AFTERFLOW_RESTORE(m_shipStreak);
-        AFTERFLOW_RESTORE(m_waveTrail);
-        AFTERFLOW_RESTORE(m_ghostTrail);
-        AFTERFLOW_RESTORE(m_swingFireMiddle);
-        AFTERFLOW_RESTORE(m_swingFireBottom);
-        AFTERFLOW_RESTORE(m_swingFireTop);
-        AFTERFLOW_RESTORE(m_dashRing);
-        if (replacedFieldCount > 0) {
-            static bool reportedSharedNodes = false;
-            if (!reportedSharedNodes) {
-                reportedSharedNodes = true;
-                log::warn("afterflow: copyAttributes replaced {} ghost node pointers with the real player's, restored the ghost ones", replacedFieldCount);
-            }
-        }
-#undef AFTERFLOW_KEEP
-#undef AFTERFLOW_RESTORE
-        {
-            static bool loggedGhostProbe = false;
-            if (!loggedGhostProbe) {
-                loggedGhostProbe = true;
-                log::info(
-                    "afterflow probe: ghost={} real={} samePlayer={} logTop shared={} particleSystems shared={} ghostParent={} realParent={}",
-                    static_cast<void*>(ghostPlayer),
-                    static_cast<void*>(realPlayer),
-                    ghostPlayer == realPlayer,
-                    ghostPlayer->m_collisionLogTop == realPlayer->m_collisionLogTop,
-                    ghostPlayer->m_particleSystems == realPlayer->m_particleSystems,
-                    static_cast<void*>(ghostPlayer->getParent()),
-                    static_cast<void*>(realPlayer->getParent())
-                );
-                log::info("afterflow probe logs: ghost {} {} {} {} real {} {} {} {}",
-                    static_cast<void*>(ghostPlayer->m_collisionLogTop),
-                    static_cast<void*>(ghostPlayer->m_collisionLogBottom),
-                    static_cast<void*>(ghostPlayer->m_collisionLogLeft),
-                    static_cast<void*>(ghostPlayer->m_collisionLogRight),
-                    static_cast<void*>(realPlayer->m_collisionLogTop),
-                    static_cast<void*>(realPlayer->m_collisionLogBottom),
-                    static_cast<void*>(realPlayer->m_collisionLogLeft),
-                    static_cast<void*>(realPlayer->m_collisionLogRight)
-                );
-            }
-        }
         ghostPlayer->m_playEffects = false;
         ghostPlayer->setScale(realPlayer->getScale());
         ghostPlayer->setContentSize(realPlayer->getContentSize());
@@ -7585,11 +7491,9 @@ finally {
 
         ghostPlayer->m_lastGroundObject = realPlayer->m_lastGroundObject;
         ghostPlayer->m_preLastGroundObject = realPlayer->m_preLastGroundObject;
-        // GD stores this exact pointer in the collision logDictionary dictionaries (storeCollision does
-        // setObject(m_maybeLastGroundObject, id)), which retains it. Sharing the real player's
-        // pointer means a ghost step can retain and then release a level object from the wrong
-        // player; point the copy at the ghost itself, which is always alive while simulating.
-        ghostPlayer->m_maybeLastGroundObject = ghostPlayer;
+        // 2.2.5 copied the real ground object here and the simulation matched the real player, pointing
+        // this at the ghost itself changed ground detection in every prediction, so it is copied again
+        ghostPlayer->m_maybeLastGroundObject = realPlayer->m_maybeLastGroundObject;
         ghostPlayer->m_collidedObject = realPlayer->m_collidedObject;
         ghostPlayer->m_objectSnappedTo = realPlayer->m_objectSnappedTo;
         ghostPlayer->m_snapDistance = realPlayer->m_snapDistance;
@@ -7745,7 +7649,7 @@ finally {
 #endif
     }
 
-    CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary) {
+    [[maybe_unused]] CCDictionary* keepGhostCollisionLog(CCDictionary* logDictionary) {
         if (!logDictionary) {
             return nullptr;
         }
