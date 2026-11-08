@@ -1,4 +1,5 @@
 # v2.2.6-beta
+- **fix: performance.** the prediction no longer snapshots a child count for every object in the level on every candidate click. that scan was the biggest per click cost on large levels, it is three container lookups now.
 - **fix: input.** wave clicks go through the buffer again. the 2.2.6 bypass that handed them straight to the game is gone, so wave no longer plays like the mod is switched off.
 - **fix: input.** queued clicks are delivered from the player update again, the same place 2.2.5 delivered them. 2.2.6 moved delivery into the base layer update, which runs at a different point in the frame, so every delivered click came out one frame off.
 - **fix: input.** the prediction budget is capped at 4 ms and defaults to 3 ms. it used to be 8 ms multiplied by the frame scale, up to 24 ms per click at 60fps, so a single click could stall the game for a frame and a half.
