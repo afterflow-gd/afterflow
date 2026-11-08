@@ -8823,7 +8823,7 @@ finally {
             horizonTicks = waveHorizonTicks(isMini);
         }
         int const stageDelayTicks = hasWave ? state.ticksWaveMode : (hasShip ? std::clamp(state.shipMaxDelayTicks, 0, 16) : state.ticksAllModes);
-        int const modeDelayTicks = modeTicksAt(activeModeIndex());
+        int const modeDelayTicks = hasWave ? 0 : modeTicksAt(activeModeIndex());
         int maxDelayTicks = st(modeDelayTicks > 0 ? modeDelayTicks : stageDelayTicks);
         if (maxDelayTicks <= 0) {
             state.hasAppliedInput = isDown;
@@ -8864,13 +8864,6 @@ finally {
                  : isUfoPress      ? ufoScore(playLayer, player1, player2, isDual, 0, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd)
                  : isShipInput     ? shipScore(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, horizonTicks, &simulationEnd)
                                  : predictOrbCandidates(playLayer, player1, player2, isDual, 0, isDown, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
-
-        // wave is pixel precise, so a click that already survives the whole horizon is applied on the
-        // spot instead of being shifted forward, delaying it is what made wave input feel mushy
-        if (isCubeStyleWave && baseDelay >= horizonTicks) {
-            state.hasAppliedInput = isDown;
-            return false;
-        }
 
         std::string tickTagText = midTickFraction > 0.f ? fmt::format(" @{:.2f}", midTickFraction) : std::string();
         if (baseDelay >= horizonTicks) {
