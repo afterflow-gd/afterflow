@@ -81,6 +81,147 @@
         "mac"
       ]
     },
+    "stage-keys-title": {
+      "type": "title",
+      "name": "stage keys",
+      "description": "bind a key to a single stage and jump straight to it. empty means unbound",
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-tight": {
+      "type": "keybind",
+      "name": "stage: tight",
+      "description": "jump straight to tight (2 ticks all modes, 2 wave)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-quick": {
+      "type": "keybind",
+      "name": "stage: quick",
+      "description": "jump straight to quick (4 ticks all modes, 4 wave)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-steady": {
+      "type": "keybind",
+      "name": "stage: steady",
+      "description": "jump straight to steady (8 ticks all modes, 8 wave)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-flow": {
+      "type": "keybind",
+      "name": "stage: flow",
+      "description": "jump straight to flow (16 ticks all modes, 8 wave)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-deep": {
+      "type": "keybind",
+      "name": "stage: deep",
+      "description": "jump straight to deep (24 ticks all modes, 12 wave)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-wide": {
+      "type": "keybind",
+      "name": "stage: wide",
+      "description": "jump straight to wide (32 ticks all modes, 16 wave)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-max": {
+      "type": "keybind",
+      "name": "stage: max",
+      "description": "jump straight to max (40 ticks all modes, 20 wave)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-raw": {
+      "type": "keybind",
+      "name": "stage: raw",
+      "description": "jump straight to raw (off, 100% raw input)",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-c1": {
+      "type": "keybind",
+      "name": "stage: custom 1",
+      "description": "jump straight to custom stage 1",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-c2": {
+      "type": "keybind",
+      "name": "stage: custom 2",
+      "description": "jump straight to custom stage 2",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-c3": {
+      "type": "keybind",
+      "name": "stage: custom 3",
+      "description": "jump straight to custom stage 3",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
+    "keybind-stage-c4": {
+      "type": "keybind",
+      "name": "stage: custom 4",
+      "description": "jump straight to custom stage 4",
+      "category": "gameplay",
+      "default": [],
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    },
     "orb-buffer-enabled": {
       "type": "bool",
       "name": "orb buffering",

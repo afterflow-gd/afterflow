@@ -3,6 +3,8 @@
 - the log scrolls on every tab, and the wheel works from anywhere over the panel instead of only over the log rows.
 - **orb buffering.** an airborne click that would have missed now waits for the orb it was aimed at: the click is held and dropped on the first tick where it actually activates a ring and the ghost is still alive. new `orb-buffer-enabled` toggle and `orb-buffer-ticks` window (default 24 ticks, 1 to 60).
 - **editor.** the panel, its keybinds and the buffering are fully disabled while the editor is open, and everything comes back when you leave it. a playtest started from the editor runs as a normal play level, buffer included.
+- **stage keys.** every stage can have its own keybind now: `keybind-stage-tight` through `keybind-stage-raw` for the eight built in stages and `keybind-stage-c1` to `keybind-stage-c4` for the four custom slots. they are unbound by default, so nothing changes until you set one. press a key anywhere to jump straight to that stage instead of cycling with f6, and custom slot keys stay dead while that slot is empty. stage keys are read straight off the key press instead of going through the settings event, so the new delay is active on the very next input, and the `raw` stage can be selected from its key too (it used to be skipped because it counts as disabled).
+- the stage tab shows a `key` button next to the hint line with the current stage's key on it. tap it and the panel waits for a key press, then binds that key to the stage. keys already used by afterflow (cycle, control panel or another stage) are refused, esc cancels and backspace clears the binding. keys are ignored in the editor, the same as the cycle key.
 - bumped version to `2.2.8` (mod.json, version.txt, CMakeLists.txt).
 
 # v2.2.7

@@ -525,6 +525,7 @@ namespace {
     bool isCrashFixed = false;
     bool isMarginUsed = false;
     bool g_inEditor = false;
+    bool g_stageKeyCapture = false;
 
     void cycleStage(int direction);
     void setStageIndex(int stageIndex);
@@ -1901,8 +1902,7 @@ finally {
     }
 
     bool tagPageExists(web::WebResponse const& response) {
-        auto code = response.code();
-        return code != 0 && code != 404;
+        return response.code() == 200;
     }
 
     void announceUpdate(bool isLoud, std::string const& installedVersion, std::string const& latestVersion) {
@@ -2892,6 +2892,10 @@ finally {
         return CCRect(CONTENT_RIGHT - 22.f - 104.f - 8.f - 88.f, STAGE_META_Y - 15.f, 88.f, 30.f);
     }
 
+    CCRect stageKeyRect() {
+        return CCRect(CONTENT_RIGHT - 22.f - 150.f, STAGE_HINT_Y - 14.f, 150.f, 28.f);
+    }
+
     float tickRowY(int row) {
         return row == 0 ? STAGE_TIMING_ALL_Y : STAGE_TIMING_WAVE_Y;
     }
@@ -3103,6 +3107,54 @@ finally {
             return fmt::format("custom {}", index - STAGE_TABLE_SIZE + 1);
         }
         return stageLabelAt(index);
+    }
+
+    std::string stageKeySetting(int stageIndex) {
+        if (stageIndex >= 0 && stageIndex < STAGE_TABLE_SIZE) {
+            return fmt::format("keybind-stage-{}", stageName(stageIndex));
+        }
+        int customIndex = stageIndex - STAGE_TABLE_SIZE;
+        if (customIndex >= 0 && customIndex < CUSTOM_STAGE_LIMIT) {
+            return fmt::format("keybind-stage-c{}", customIndex + 1);
+        }
+        return {};
+    }
+
+    std::string stageKeyText(int stageIndex) {
+        auto settingName = stageKeySetting(stageIndex);
+        if (settingName.empty()) {
+            return "unbound";
+        }
+        return lowercaseText(keybindList(settingName));
+    }
+
+    bool keybindOnSetting(std::string_view settingName, Keybind const& candidate) {
+        auto keybinds = Mod::get()->getSettingValue<std::vector<Keybind>>(settingName);
+        for (auto const& keybind : keybinds) {
+            if (keybind == candidate) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string keybindOwnerName(Keybind const& candidate, std::string const& ignoredSetting) {
+        if (ignoredSetting != KEYBIND_STAGE && keybindOnSetting(KEYBIND_STAGE, candidate)) {
+            return "cycle stages";
+        }
+        if (ignoredSetting != KEYBIND_TERMINAL && keybindOnSetting(KEYBIND_TERMINAL, candidate)) {
+            return "control panel";
+        }
+        for (int stageIndex = 0; stageIndex < STAGE_TABLE_SIZE + CUSTOM_STAGE_LIMIT; ++stageIndex) {
+            auto settingName = stageKeySetting(stageIndex);
+            if (settingName.empty() || settingName == ignoredSetting) {
+                continue;
+            }
+            if (keybindOnSetting(settingName, candidate)) {
+                return fmt::format("stage: {}", stageTitleAt(stageIndex));
+            }
+        }
+        return {};
     }
 
     void fitLabelToWidth(CCLabelBMFont* label, float maxWidth) {
@@ -3508,6 +3560,7 @@ finally {
             ModeIconAdd,
             StageAdd,
             CustomRemove,
+            StageKey,
             TickAdjust,
             TickField,
             TickSlider,
@@ -3557,6 +3610,9 @@ finally {
         void resumeFromPanel();
         void removePauseLayers();
         void updateHints();
+        void beginStageKeyCapture();
+        void cancelStageKeyCapture();
+        void applyStageKey(Keybind const& keybind, bool clear);
         void tickRefresh(float dt);
         void popupTick(float dt);
 
@@ -3604,6 +3660,7 @@ finally {
         CCLabelBMFont* m_toolsTitleLabels[3] = {};
         CCLabelBMFont* m_toolsDescLabels[3] = {};
         CCLabelBMFont* m_stageTimingLabels[4] = {};
+        CCLabelBMFont* m_stageKeyLabel = nullptr;
         CCLabelBMFont* m_tickBtnLabels[8] = {};
         CCLabelBMFont* m_tickValueLabels[2] = {};
         CCNode* m_tutorialLayer = nullptr;
@@ -3740,6 +3797,36 @@ finally {
 
         buildDeck();
 
+        addEventListener(KeyboardInputEvent(), [this](KeyboardInputData& data) {
+            if (!g_stageKeyCapture) {
+                return false;
+            }
+            if (data.action != KeyboardInputData::Action::Press) {
+                return true;
+            }
+            if (data.key == KEY_Escape) {
+                cancelStageKeyCapture();
+                return true;
+            }
+            if (data.key == KEY_Delete || data.key == KEY_Backspace) {
+                applyStageKey(Keybind(), true);
+                return true;
+            }
+            if (data.key == KEY_None || data.key == KEY_Unknown) {
+                return true;
+            }
+            Keybind candidate(data.key, data.modifiers);
+            auto settingName = stageKeySetting(state.stageIndex);
+            auto ownerName = keybindOwnerName(candidate, settingName);
+            if (!ownerName.empty()) {
+                say("{} is already used by {}", lowercaseText(candidate.toString()), ownerName);
+                refresh();
+                return true;
+            }
+            applyStageKey(candidate, false);
+            return true;
+        });
+
         m_launcher = CCNode::create();
         m_launcher->setContentSize(CCSize(68.f, 68.f));
         m_launcher->setAnchorPoint(CCPoint(0.5f, 0.5f));
@@ -3773,6 +3860,7 @@ finally {
         m_activityLabel = nullptr;
         m_activityCountLabel = nullptr;
         m_stageHintKeyLabel = nullptr;
+        m_stageKeyLabel = nullptr;
         m_stageHintLabel = nullptr;
         m_panelHintKeyLabel = nullptr;
         m_panelHintLabel = nullptr;
@@ -4012,6 +4100,15 @@ finally {
             hint->setPosition(CCPoint(LOG_X + 22.f, STAGE_HINT_Y));
             m_deck->addChild(hint, 3);
             m_stageTimingLabels[2] = hint;
+        }
+        if (!isMobileHost()) {
+            if (auto* keyLabel = makeLabel("key unbound", false, 0.58f, accentColor())) {
+                auto keyRect = stageKeyRect();
+                fitLabelToWidth(keyLabel, keyRect.size.width - 16.f);
+                keyLabel->setPosition(CCPoint(keyRect.getMidX(), keyRect.getMidY()));
+                m_deck->addChild(keyLabel, 3);
+                m_stageKeyLabel = keyLabel;
+            }
         }
 
         for (int row = 0; row < 2; ++row) {
@@ -5004,12 +5101,32 @@ finally {
             if (m_customRemoveLabel) {
                 m_customRemoveLabel->setVisible(showStageTab && isCustomSelected);
             }
+            if (showStageTab && !isMobileHost()) {
+                drawCurvedRect(
+                    m_stageTrack,
+                    stageKeyRect(),
+                    6.f,
+                    color4(accentColor(), g_stageKeyCapture ? 52 : 16),
+                    color4(accentColor(), g_stageKeyCapture ? 190 : 90),
+                    1.f
+                );
+            }
+            if (m_stageKeyLabel) {
+                m_stageKeyLabel->setVisible(showStageTab && !isMobileHost());
+                m_stageKeyLabel->setScale(0.58f * getUIFontScale());
+                m_stageKeyLabel->setString(fmt::format("key {}", stageKeyText(state.stageIndex)).c_str());
+                fitLabelToWidth(m_stageKeyLabel, stageKeyRect().size.width - 16.f);
+            }
 
             if (m_stageTimingLabels[2]) {
                 bool const overSafeTicks = isCustomSelected
                     && (customStage->ticksAll > CUSTOM_TICKS_SAFE || customStage->ticksWave > CUSTOM_TICKS_SAFE);
                 m_stageTimingLabels[2]->setColor(overSafeTicks ? warningColor() : faintTextColor());
-                if (!state.isEnabled) {
+                if (g_stageKeyCapture) {
+                    m_stageTimingLabels[2]->setColor(accentColor());
+                    m_stageTimingLabels[2]->setString("waiting for key press...  esc cancels, backspace clears");
+                }
+                else if (!state.isEnabled) {
                     m_stageTimingLabels[2]->setString("raw input, nothing is buffered");
                 }
                 else if (overSafeTicks) {
@@ -5024,6 +5141,9 @@ finally {
                 else {
                     m_stageTimingLabels[2]->setString("custom stage limit reached");
                 }
+                m_stageTimingLabels[2]->setScale(0.60f * getUIFontScale());
+                float const hintRight = isMobileHost() ? CONTENT_RIGHT - 22.f : stageKeyRect().getMinX() - 12.f;
+                fitLabelToWidth(m_stageTimingLabels[2], hintRight - (LOG_X + 22.f));
             }
         }
 
@@ -5243,6 +5363,7 @@ finally {
         closeCreditsLayer();
         closeLogLayer();
         endTickEdit();
+        g_stageKeyCapture = false;
         if (!isMobileHost()) {
             setMouseEnabled(false);
         }
@@ -5296,6 +5417,10 @@ finally {
     }
 
     void AfterflowOverlay::togglePanel() {
+        if (g_stageKeyCapture) {
+            cancelStageKeyCapture();
+            return;
+        }
         if (m_isOpen) {
             closePanel();
         }
@@ -5352,6 +5477,7 @@ finally {
         if (!isMobileHost()) {
             setMouseEnabled(false);
         }
+        g_stageKeyCapture = false;
         m_isOpen = false;
         m_didPauseForPanel = false;
         m_isDraggingLauncher = false;
@@ -6292,6 +6418,9 @@ finally {
             return HitTarget::Credits;
         }
         if (m_activeTab == 1) {
+            if (!isMobileHost() && stageKeyRect().containsPoint(point)) {
+                return HitTarget::StageKey;
+            }
             if (customAddRect().containsPoint(point)) {
                 return HitTarget::StageAdd;
             }
@@ -6479,6 +6608,9 @@ finally {
                 }
                 break;
             }
+            case HitTarget::StageKey:
+                beginStageKeyCapture();
+                break;
             case HitTarget::Logo:
                 startTutorial();
                 break;
@@ -6760,6 +6892,49 @@ finally {
         }
     }
 
+    void AfterflowOverlay::beginStageKeyCapture() {
+        if (stageKeySetting(state.stageIndex).empty()) {
+            return;
+        }
+        endTickEdit();
+        restorePressed();
+        g_stageKeyCapture = true;
+        say("waiting for key press...");
+        refresh();
+    }
+
+    void AfterflowOverlay::cancelStageKeyCapture() {
+        if (!g_stageKeyCapture) {
+            return;
+        }
+        g_stageKeyCapture = false;
+        say("key capture cancelled");
+        refresh();
+    }
+
+    void AfterflowOverlay::applyStageKey(Keybind const& keybind, bool clear) {
+        auto settingName = stageKeySetting(state.stageIndex);
+        auto stageTitle = stageTitleAt(state.stageIndex);
+        g_stageKeyCapture = false;
+        if (settingName.empty()) {
+            refresh();
+            return;
+        }
+        std::vector<Keybind> bindings;
+        if (!clear) {
+            bindings.push_back(keybind);
+        }
+        Mod::get()->setSettingValue<std::vector<Keybind>>(settingName, bindings);
+        (void)Mod::get()->saveData();
+        if (clear) {
+            say("{} key cleared", stageTitle);
+        }
+        else {
+            say("{} -> {}", lowercaseText(keybind.toString()), stageTitle);
+        }
+        refresh();
+    }
+
     void AfterflowOverlay::pauseForPanel() {
         m_didPauseForPanel = false;
         auto* gameLayer = GameManager::get()->m_playLayer;
@@ -6901,7 +7076,7 @@ finally {
     }
 
     void toggleAfterflowPanel() {
-        if (inEditor()) {
+        if (inEditor() || g_stageKeyCapture) {
             return;
         }
         auto* scene = CCScene::get();
@@ -8257,6 +8432,7 @@ finally {
     }
 
     void setStageIndex(int stageIndex) {
+        g_stageKeyCapture = false;
         int nextIndex = (stageIndex % stageTotalCount() + stageTotalCount()) % stageTotalCount();
         bool didChange = nextIndex != state.stageIndex;
         state.stageIndex = nextIndex;
@@ -8274,7 +8450,7 @@ finally {
     }
 
     void cycleStage(int stageDirection = 1) {
-        if (inEditor()) {
+        if (inEditor() || g_stageKeyCapture) {
             return;
         }
         int previousIndex = state.stageIndex;
@@ -8282,6 +8458,45 @@ finally {
         if (state.stageIndex != previousIndex) {
             say("{} cycle -> {}", stageKey(), stageBanner());
         }
+    }
+
+    void jumpToStage(int stageIndex) {
+        if (inEditor() || g_stageKeyCapture) {
+            return;
+        }
+        if (stageIndex < 0 || stageIndex >= stageTotalCount()) {
+            return;
+        }
+        if (stageIndex == state.stageIndex) {
+            return;
+        }
+        setStageIndex(stageIndex);
+        say("{} -> {}", stageKeyText(stageIndex), stageBanner());
+    }
+
+    void setupStageKeybinds() {
+        if (isMobileHost()) {
+            return;
+        }
+        static auto stageKeyInputListener = KeyboardInputEvent().listen([](KeyboardInputData& data) {
+            if (data.action != KeyboardInputData::Action::Press) {
+                return false;
+            }
+            if (g_stageKeyCapture) {
+                return false;
+            }
+            Keybind pressed(data.key, data.modifiers);
+            for (int stageIndex = 0; stageIndex < STAGE_TABLE_SIZE + CUSTOM_STAGE_LIMIT; ++stageIndex) {
+                auto settingName = stageKeySetting(stageIndex);
+                if (settingName.empty() || !keybindOnSetting(settingName, pressed)) {
+                    continue;
+                }
+                jumpToStage(stageIndex);
+                return true;
+            }
+            return false;
+        });
+        (void)stageKeyInputListener;
     }
 
     void startCycleWatcher() {
@@ -8372,6 +8587,7 @@ $on_mod(Loaded) {
         startCycleWatcher();
     }
     setupKeybinds();
+    setupStageKeybinds();
     static auto sceneListener = SceneEvent().listen([](CCScene* scene) {
         attachAfterflowOverlay(scene);
     });
