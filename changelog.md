@@ -1,3 +1,10 @@
+# v2.2.8
+- **scroll fix.** the panel used to take the mouse wheel even when it was closed, which is why scrolling stopped working once afterflow was installed. the overlay is only the mouse delegate while the panel is actually open now, so the level list, the editor and the rest of the game scroll normally again.
+- the log scrolls on every tab, and the wheel works from anywhere over the panel instead of only over the log rows.
+- **orb buffering.** an airborne click that would have missed now waits for the orb it was aimed at: the click is held and dropped on the first tick where it actually activates a ring and the ghost is still alive. new `orb-buffer-enabled` toggle and `orb-buffer-ticks` window (default 24 ticks, 1 to 60).
+- **editor.** the panel, its keybinds and the buffering are fully disabled while the editor is open, and everything comes back when you leave it. a playtest started from the editor runs as a normal play level, buffer included.
+- bumped version to `2.2.8` (mod.json, version.txt, CMakeLists.txt).
+
 # v2.2.7
 - **rolled back to 2.2.5.** the whole gameplay side is the 2.2.5 code again. the prediction, the ghost players, the click buffer, the wave handling, the budgets and the sweep are all the exact 2.2.5 functions, so it plays like 2.2.5 again.
 - **kept the modes tab.** the panel has a fourth tab now, one tile per game mode with the mode icon, the current ticks under it, `-5` / `+5` on the top row, `-` / `+` on the bottom row, tap the tile to put that mode back on auto and `all auto` to clear every mode. wave still follows the stage ticks.

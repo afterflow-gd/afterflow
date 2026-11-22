@@ -487,6 +487,8 @@ namespace {
         bool fullSimulationState = true;
 
         int orbWindowTicks = 6;
+        bool orbBufferEnabled = true;
+        int orbBufferTicks = 24;
         int simulationTick = 0;
         int firstOrbTouchTick = -1;
         int orbUseTick = -1;
@@ -522,6 +524,7 @@ namespace {
     bool isQuickScore = false;
     bool isCrashFixed = false;
     bool isMarginUsed = false;
+    bool g_inEditor = false;
 
     void cycleStage(int direction);
     void setStageIndex(int stageIndex);
@@ -2404,6 +2407,8 @@ finally {
         state.waveVersion46Mode = false;
         state.waveMarginEnabled = true;
         state.orbWindowTicks = 6;
+        state.orbBufferEnabled = Mod::get()->getSettingValue<bool>("orb-buffer-enabled");
+        state.orbBufferTicks = static_cast<int>(Mod::get()->getSettingValue<int64_t>("orb-buffer-ticks"));
         state.performanceMode = false;
         state.userBudgetMilliseconds = 8.0;
         state.wasAutoReleased = false;
@@ -3273,6 +3278,21 @@ finally {
             }
         }
         return nullptr;
+    }
+
+    bool editorSceneActive(CCScene* scene) {
+        return scene && findDescendant<LevelEditorLayer>(scene) != nullptr;
+    }
+
+    bool inEditor() {
+        if (g_inEditor) {
+            return true;
+        }
+        auto* manager = GameManager::get();
+        if (manager && manager->m_playLayer) {
+            return false;
+        }
+        return editorSceneActive(CCScene::get());
     }
 
     constexpr char const* TUTORIAL_DONE_KEY = "tutorial-done";
@@ -5190,6 +5210,7 @@ finally {
         m_logLastCount = 0;
         if (!isMobileHost()) {
             setTouchEnabled(true);
+            setMouseEnabled(true);
         }
         if (m_launcher) {
             m_launcher->setVisible(false);
@@ -5222,6 +5243,9 @@ finally {
         closeCreditsLayer();
         closeLogLayer();
         endTickEdit();
+        if (!isMobileHost()) {
+            setMouseEnabled(false);
+        }
         m_logDragging = false;
         m_logDragMoved = false;
         m_isOpen = false;
@@ -5299,11 +5323,14 @@ finally {
         m_popupHidden = popupOpen;
         setVisible(!popupOpen);
         setTouchEnabled(!popupOpen && isMobileHost());
+        if (!isMobileHost()) {
+            setMouseEnabled(!popupOpen && m_isOpen);
+        }
     }
 
     void AfterflowOverlay::onEnter() {
         if (!isMobileHost()) {
-            setMouseEnabled(true);
+            setMouseEnabled(m_isOpen);
         }
         CCLayer::onEnter();
         layout();
@@ -5322,6 +5349,9 @@ finally {
     }
 
     void AfterflowOverlay::onExit() {
+        if (!isMobileHost()) {
+            setMouseEnabled(false);
+        }
         m_isOpen = false;
         m_didPauseForPanel = false;
         m_isDraggingLauncher = false;
@@ -5338,7 +5368,7 @@ finally {
     }
 
     void AfterflowOverlay::scrollWheel(float y, float) {
-        if (!m_isOpen || !m_deck || !m_deck->isVisible() || m_tutorialStep >= 0 || m_creditsLayer) {
+        if (!m_isOpen || !m_deck || m_tutorialStep >= 0 || m_creditsLayer) {
             return;
         }
         float const steps = std::clamp(y, -3.f, 3.f);
@@ -5347,20 +5377,19 @@ finally {
         }
         CCPoint const mouse = geode::cocos::getMousePos();
         CCPoint const deckPoint = m_deck->convertToNodeSpace(mouse);
-        if (!CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT).containsPoint(deckPoint)) {
-            return;
-        }
+        bool const overDeck = CCRect(0.f, 0.f, DECK_WIDTH, DECK_HEIGHT).containsPoint(deckPoint);
         if (m_logLayer) {
-            if (logViewListRect().containsPoint(deckPoint)) {
+            if (!overDeck || logViewListRect().containsPoint(deckPoint)) {
                 m_logViewScroll += steps;
                 refresh();
             }
             return;
         }
-        if (m_activeTab == 0 && logPaneRect().containsPoint(deckPoint)) {
-            m_logScroll += steps;
-            refresh();
+        if (overDeck && m_activeTab != 0) {
+            return;
         }
+        m_logScroll += steps;
+        refresh();
     }
 
     bool AfterflowOverlay::ccTouchBegan(CCTouch* touch, CCEvent*) {
@@ -6785,6 +6814,17 @@ finally {
         return scene->getChildByType<AfterflowOverlay>(0);
     }
 
+    void detachAfterflowOverlay() {
+        auto* scene = CCScene::get();
+        if (!scene) {
+            return;
+        }
+        if (auto* overlay = scene->getChildByType<AfterflowOverlay>(0)) {
+            overlay->closePanel();
+            overlay->removeFromParentAndCleanup(true);
+        }
+    }
+
     void refreshAfterflowOverlay() {
         if (auto* overlay = activeAfterflowOverlay()) {
             overlay->refresh();
@@ -6793,6 +6833,10 @@ finally {
 
     void buildAfterflowOverlay(CCScene* scene) {
         if (!scene || scene->getChildByType<AfterflowOverlay>(0)) {
+            return;
+        }
+        if (editorSceneActive(scene)) {
+            g_inEditor = true;
             return;
         }
         if (typeinfo_cast<CCTransitionScene*>(scene)) {
@@ -6857,6 +6901,9 @@ finally {
     }
 
     void toggleAfterflowPanel() {
+        if (inEditor()) {
+            return;
+        }
         auto* scene = CCScene::get();
         if (!scene || typeinfo_cast<CCTransitionScene*>(scene)) {
             return;
@@ -7905,7 +7952,52 @@ finally {
         state.queuedInputs.push_back({ tickCount, isDown });
     }
 
+    int findOrbBufferDelay(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int horizonTicks, int releaseAfterTicks, int windowTicks, int* landingTick) {
+        if (windowTicks <= 0 || !player1 || !state.ghostPlayer1 || !landingTick) {
+            return 0;
+        }
+        using clock = std::chrono::steady_clock;
+        auto startTime = clock::now();
+        auto hasExceededBudget = [&] {
+            return std::chrono::duration<double, std::milli>(clock::now() - startTime).count() > state.budgetMilliseconds;
+        };
+        SimEnd simulationEnd;
+        bool const savedOrbClick = state.orbClickEnabled;
+        state.orbClickEnabled = false;
+        struct OrbClickRestore {
+            bool value;
+            ~OrbClickRestore() {
+                state.orbClickEnabled = value;
+            }
+        } orbClickRestore{ savedOrbClick };
+
+        int const nowResult = simulate(gameLayer, player1, player2, isDual, 0, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+        if (nowResult < horizonTicks || state.pressOrbRingObject) {
+            return 0;
+        }
+        for (int delayTicks = 1; delayTicks <= windowTicks; ++delayTicks) {
+            if (hasExceededBudget()) {
+                break;
+            }
+            int const bufferResult = simulate(gameLayer, player1, player2, isDual, delayTicks, true, horizonTicks, releaseAfterTicks, horizonTicks, &simulationEnd);
+            if (simulationEnd == SimEnd::StopSearch) {
+                break;
+            }
+            if (!state.pressOrbRingObject || bufferResult < horizonTicks) {
+                continue;
+            }
+            *landingTick = bufferResult;
+            state.intendedOrbObject = state.pressOrbRingObject;
+            return delayTicks;
+        }
+        return 0;
+    }
+
     bool intercept(GJBaseGameLayer* baseGameLayer, bool isDown, bool isFirstPlayer) {
+        if (inEditor()) {
+            state.hasAppliedInput = isDown;
+            return false;
+        }
         clickStartTime = std::chrono::steady_clock::now();
         clickBudget();
         auto* playLayer = GameManager::get()->m_playLayer;
@@ -8067,6 +8159,18 @@ finally {
             }
         }
 
+        if (isDown && !hasWave && !hasShip && !isGrounded && !isOrbUnderClick && state.orbBufferEnabled && state.smartEnabled) {
+            int const orbBufferWindowTicks = st(std::clamp(state.orbBufferTicks, 1, 60));
+            int orbBufferLandingTick = 0;
+            int const orbBufferDelay = findOrbBufferDelay(playLayer, player1, player2, isDual, horizonTicks, releaseAfterTicks, orbBufferWindowTicks, &orbBufferLandingTick);
+            if (orbBufferDelay > 0) {
+                say("orb buffer +{}t ({:g}f) -> {}t", orbBufferDelay, orbBufferDelay * TICK_DURATION, orbBufferLandingTick);
+                state.inputShiftTicks = orbBufferDelay;
+                queueInput(orbBufferDelay - earlyTicks, isDown);
+                return true;
+            }
+        }
+
         SimEnd simulationEnd;
         bool isCubeStyleWave = hasWave;
         bool isRobotPress = isDown && hasAnyRobot && !hasWave && state.robotSmartEnabled;
@@ -8170,6 +8274,9 @@ finally {
     }
 
     void cycleStage(int stageDirection = 1) {
+        if (inEditor()) {
+            return;
+        }
         int previousIndex = state.stageIndex;
         setStageIndex(previousIndex + stageDirection);
         if (state.stageIndex != previousIndex) {
@@ -8342,6 +8449,7 @@ class $modify(BufPlayLayer, PlayLayer) {
         if (!PlayLayer::init(gameLevel, useReplayData, skipObjectCreation)) {
             return false;
         }
+        g_inEditor = false;
         dropGhosts();
         readSettings();
         applyStage();
@@ -8738,9 +8846,16 @@ class $modify(BufMenuLayer, MenuLayer) {
 class $modify(BufEditorLayer, LevelEditorLayer) {
     bool init(GJGameLevel* gameLevel, bool withoutUI) {
         bool isSuccess = LevelEditorLayer::init(gameLevel, withoutUI);
+        g_inEditor = true;
         dropGhosts();
-        scheduleAfterflowOverlay(this);
+        detachAfterflowOverlay();
         return isSuccess;
+    }
+
+    void onExit() {
+        g_inEditor = false;
+        dropGhosts();
+        LevelEditorLayer::onExit();
     }
 };
 

@@ -8,7 +8,7 @@
   },
   "id": "afterflow.prsevend",
   "name": "Afterflow",
-  "version": "2.2.7",
+  "version": "2.2.8",
   "developer": "prsevend",
   "description": "a predictive input cheat that fixes your early clicks and makes them accurate, with customizable UI colors and a polished control panel.",
   "tags": [
@@ -80,6 +80,20 @@
         "win",
         "mac"
       ]
+    },
+    "orb-buffer-enabled": {
+      "type": "bool",
+      "name": "orb buffering",
+      "description": "hold an early click and drop it on the orb it would have missed",
+      "default": true
+    },
+    "orb-buffer-ticks": {
+      "type": "int",
+      "name": "orb buffer window",
+      "description": "how many ticks an early click waits for an orb (60 ticks = 0.25s)",
+      "default": 24,
+      "min": 1,
+      "max": 60
     },
     "ui-title": {
       "type": "title",
