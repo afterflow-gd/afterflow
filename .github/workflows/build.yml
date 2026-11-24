@@ -25,7 +25,10 @@ jobs:
           - name: iOS
             os: macos-26-intel
             target: iOS
-            bindings-ref: 1605f500d053f8de122bf5c7dc6d17c24866e02e
+            # pinned, but it has to be a commit whose bindings tree contains
+            # bindings/2.2091: the ios job builds codegen locally and it has
+            # nothing to generate for a gd version the pin predates
+            bindings-ref: d809df8ec8dd138e07fee335c2eba6df8c08acb8
             configure-args: -DSKIP_BUILDING_CODEGEN=OFF
           - name: Android32
             os: ubuntu-latest
