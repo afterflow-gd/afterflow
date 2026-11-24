@@ -4,7 +4,7 @@ by prsevend
 
 a predictive input cheat that fixes your early clicks and makes them accurate.
 
-built for **geometry dash 2.2** (gd 2.2081, geode 5.11.2) on windows, macos, android and ios. **f6** cycles stages anywhere. **f9** opens a custom in-game control panel with stage controls, a live log, copy log and a terminal shortcut. on mobile, a draggable **AF** button opens the same panel. both desktop keys are geode keybinds, so you can rebind them in mod settings or the keybinds popup.
+built for **geometry dash 2.2** (gd 2.209, geode 6.0.0) on windows, macos, android and ios. **f6** cycles stages anywhere. **f9** opens a custom in-game control panel with stage controls, a live log, copy log and a terminal shortcut. on mobile, a draggable **AF** button opens the same panel. both desktop keys are geode keybinds, so you can rebind them in mod settings or the keybinds popup.
 
 ## what it does
 
