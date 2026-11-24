@@ -7671,6 +7671,17 @@ finally {
         return std::max(orbRadius, 12.f);
     }
 
+    // dash orbs and their gravity flipping variant, matched by object id:
+    // DashRingObject has no typeinfo symbol on macos arm64, so typeinfo_cast
+    // cannot be used there (it fails to link)
+    bool isDashRing(RingObject* ringObject) {
+        if (!ringObject) {
+            return false;
+        }
+        int const objectId = ringObject->m_objectID;
+        return objectId == 1704 || objectId == 1751;
+    }
+
     int alignOrb(PlayLayer* gameLayer, PlayerObject* player1, PlayerObject* player2, bool isDual, int horizonTicks, int releaseAfterTicks, int learnedDelay, int* landingTick) {
         int searchWindowTicks = st(std::clamp(state.orbWindowTicks, 1, 64));
         int foundTick = 0;
@@ -7719,7 +7730,7 @@ finally {
                     continue;
                 }
 
-                if (typeinfo_cast<DashRingObject*>(candidateProbe.ringObject)) {
+                if (isDashRing(candidateProbe.ringObject)) {
                     float orbRadius = orbSpriteRadius(candidateProbe.ringObject);
                     if (candidateProbe.closeDistanceSquared > orbRadius * orbRadius * 2.25f) {
                         continue;
@@ -9270,9 +9281,12 @@ class $modify(BufPlayerObject, PlayerObject) {
         PlayerObject::playerDestroyed(suppressEffects);
     }
 
+#ifndef GEODE_IS_IOS
+    // the 2.2091 ios bindings have no address for this, so it cannot be hooked there
     void playCompleteEffect(bool suppressEffects, bool isInstant) {
         if (!ghostEffect()) PlayerObject::playCompleteEffect(suppressEffects, isInstant);
     }
+#endif
 
     void ringJump(RingObject* ringObject, bool skipCollisionCheck) {
         if (state.isSimulating) {
@@ -9476,7 +9490,7 @@ class $modify(BufBaseGameLayer, GJBaseGameLayer) {
         GJBaseGameLayer::playerTouchedRing(playerObject, ringObject);
 
         if (state.isSimulating && state.orbClickEnabled) {
-            if (typeinfo_cast<DashRingObject*>(ringObject)) {
+            if (isDashRing(ringObject)) {
                 return;
             }
             bool isFirst = playerObject == state.ghostPlayer1;
